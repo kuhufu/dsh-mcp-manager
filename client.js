@@ -575,7 +575,6 @@ window.__ModuleLoader__.load({
           },
           naming,
         ),
-        props.busy ? h('span', { className: 'dshmcp-spinner', 'aria-hidden': 'true' }) : null,
       );
     }
 
@@ -1933,7 +1932,6 @@ window.__ModuleLoader__.load({
 .dshmcp-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
 .dshmcp-actions{display:flex;align-items:center;gap:2px;flex:none}
 .dshmcp-actions-spaced{gap:10px}
-.dshmcp-spinner{position:absolute;top:50%;left:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;border:1.5px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;animation:dshmcp-spin .8s linear infinite;pointer-events:none}
 .dshmcp-switch{position:relative;box-sizing:border-box;width:36px;height:20px;padding:0;border-radius:999px;border:.5px solid var(--dsw-alias-border-l3);background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background .15s ease,border-color .15s ease}
 .dshmcp-switch::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transform:translateY(-50%);transition:left .15s ease}
 .dshmcp-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary);border-color:transparent}
@@ -2002,7 +2000,7 @@ window.__ModuleLoader__.load({
 @keyframes dshmcp-spin{to{transform:rotate(360deg)}}
 @keyframes dshmcp-pulse{0%,100%{opacity:1}50%{opacity:.45}}
 @media (max-width:560px){.dshmcp-grid{grid-template-columns:1fr}.dshmcp-line{flex-wrap:wrap}.dshmcp-actions{width:100%;justify-content:flex-end}.dshmcp-confirm{flex-wrap:wrap}}
-@media (prefers-reduced-motion:reduce){.dshmcp-dot[data-state=connecting],.dshmcp-skeleton-line,.dshmcp-spinner,.dshmcp-icon-btn[data-spinning=true] .dshmcp-icon{animation:none}.dshmcp-expand .dshmcp-icon,.dshmcp-switch,.dshmcp-switch::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.dshmcp-dot[data-state=connecting],.dshmcp-skeleton-line,.dshmcp-icon-btn[data-spinning=true] .dshmcp-icon{animation:none}.dshmcp-expand .dshmcp-icon,.dshmcp-switch,.dshmcp-switch::after{transition:none}}
 `;
 
     // ── module surface ────────────────────────────────────────────────────
