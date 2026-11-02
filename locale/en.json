@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MCP Servers",
+    "description": "Manage Model Context Protocol servers: connect tools from local commands or HTTP endpoints, then edit, reconnect, or remove them."
+  }
+}

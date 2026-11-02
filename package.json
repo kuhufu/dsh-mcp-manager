@@ -1,0 +1,64 @@
+{
+  "name": "@kuhufu/dsh-mcp-manager",
+  "version": "0.1.0",
+  "description": "MCP server management for DeepSeek Harness: manage Model Context Protocol servers from the Web settings page or a left-rail panel, with their tools bridged onto ctx.tools.",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "model-context-protocol",
+    "tools"
+  ],
+  "license": "MIT",
+  "author": "kuhufu",
+  "homepage": "https://github.com/kuhufu/dsh-mcp-manager#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuhufu/dsh-mcp-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kuhufu/dsh-mcp-manager/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "host/*.js",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "CONTRACT.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

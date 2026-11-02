@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MCP 服务器",
+    "description": "管理 Model Context Protocol 服务器：连接本地命令或 HTTP 端点的工具，并可编辑、重连或删除。"
+  }
+}
