@@ -38,7 +38,7 @@
 ### `dsh` 命令行
 
 ```sh
-# 安装到命令行 profile（web / tui / 你自己的 profile 名）
+# 安装到命令行 profile（web / tui / 你自己的 profile 名）；发布到 npm 后可用
 dsh plugin --profile web add @kuhufu/dsh-mcp-manager
 
 # 升级到已发布的最新版本
@@ -52,7 +52,7 @@ dsh plugin --profile web remove @kuhufu/dsh-mcp-manager
 
 ```sh
 git clone https://github.com/kuhufu/dsh-mcp-manager.git
-dsh plugin --profile web add ./dsh-mcp-manager   # 相对路径按当前目录解析
+dsh plugin --profile web add ./dsh-mcp-manager   # 相对路径按 shell 当前目录解析
 ```
 
 ### 桌面端 profile

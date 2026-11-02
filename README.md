@@ -45,7 +45,7 @@ link, so local edits apply on the next reload.
 ### `dsh` CLI
 
 ```sh
-# install into a CLI profile (`web`, `tui`, or your own profile name)
+# install into a CLI profile (`web`, `tui`, or your own profile name); works once published
 dsh plugin --profile web add @kuhufu/dsh-mcp-manager
 
 # update to the latest published version
@@ -60,8 +60,7 @@ enabled yet. A checkout installs the same way:
 
 ```sh
 git clone https://github.com/kuhufu/dsh-mcp-manager.git
-cd dsh-mcp-manager && cd ..
-dsh plugin --profile web add ./dsh-mcp-manager   # relative paths are resolved from here
+dsh plugin --profile web add ./dsh-mcp-manager   # relative paths resolve from your shell's cwd
 ```
 
 ### Desktop app profile
