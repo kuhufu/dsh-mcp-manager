@@ -630,11 +630,11 @@ function createMcpManager({ ctx, logger }) {
     } catch {
       schemas = [];
     }
+    const managedNames = new Set(store.list().map((server) => server.name));
     const rows = [];
     for (const entry of loader.entries()) {
       const options = entry === null || entry === undefined ? undefined : entry.options;
       if (options === undefined || options === null || options.name !== '@deepseek-ai/dsh-mcp-client') continue;
-      if (entry.disabled === true) continue;
       const config = options.config !== null && typeof options.config === 'object' ? options.config : {};
       const serverName = typeof config.serverName === 'string' && config.serverName !== '' ? config.serverName : undefined;
       const prefix = serverName === undefined ? undefined : `mcp__${serverName}__`;
@@ -649,10 +649,76 @@ function createMcpManager({ ctx, logger }) {
         args: Array.isArray(config.args) ? config.args.filter((arg) => typeof arg === 'string') : [],
         url: typeof config.url === 'string' ? config.url : undefined,
         enabled: entry.disabled !== true,
+        // A managed record with this name owns the namespace; switching the source
+        // on would collide with it, so the page disables that control.
+        shadowed: serverName !== undefined && managedNames.has(serverName),
         toolCount,
       });
     }
     return rows;
+  }
+
+  /**
+   * Enable or disable one `@deepseek-ai/dsh-mcp-client` row.
+   *
+   * The page must not edit another bundle's rows as configuration, but switching
+   * one on or off is ordinary profile state, exactly what Settings → Plugins
+   * does; routing it through `pluginManager` keeps the persisted override and
+   * the live reload in one place.
+   *
+   * @param {{ entryId: string, enabled: boolean }} payload - Loader row id and target state.
+   * @returns {Promise<{ servers: object[] }>} fresh managed views; the route adds `external` and `ui`.
+   */
+  function setExternalEnabled(payload) {
+    return enqueue(async () => {
+      const entryId = typeof payload.entryId === 'string' ? payload.entryId : '';
+      if (entryId === '') {
+        throw new ManagerError('invalid', 'request body must include a non-empty "entryId"', 'entryId');
+      }
+      if (typeof payload.enabled !== 'boolean') {
+        throw new ManagerError('invalid', 'enabled must be a boolean', 'enabled');
+      }
+      let loader;
+      try {
+        loader = typeof ctx.get === 'function' ? ctx.get('loader') : undefined;
+      } catch {
+        loader = undefined;
+      }
+      if (loader === undefined || typeof loader.entries !== 'function') {
+        throw new ManagerError('unsupported', 'the Loader is not available in this deployment');
+      }
+      let source;
+      for (const entry of loader.entries()) {
+        if (entry === null || entry === undefined || entry.id !== entryId) continue;
+        source = entry;
+        break;
+      }
+      if (source === undefined) throw new ManagerError('not-found', `no Loader entry "${entryId}"`);
+      if (source.options === null || source.options === undefined || source.options.name !== '@deepseek-ai/dsh-mcp-client') {
+        throw new ManagerError('invalid', `entry "${entryId}" is not a dsh-mcp-client entry`, 'entryId');
+      }
+      if (payload.enabled) {
+        const config = source.options.config !== null && typeof source.options.config === 'object' ? source.options.config : {};
+        const name = typeof config.serverName === 'string' ? config.serverName : undefined;
+        if (name !== undefined && store.list().some((server) => server.name === name)) {
+          throw new ManagerError('invalid', `"${name}" is managed on this page; enabling its dsh-mcp-client row would collide on tool names`, 'enabled');
+        }
+      }
+      const manager = typeof ctx.get === 'function' ? ctx.get('pluginManager') : undefined;
+      if (manager === undefined || manager === null || typeof manager.setPluginEnabled !== 'function') {
+        throw new ManagerError('unsupported', 'plugin management is not available in this deployment');
+      }
+      const change = await manager.setPluginEnabled(entryId, payload.enabled);
+      const application = change === null || change === undefined ? 'applied' : change.application;
+      if (change !== null && change !== undefined && change.changed !== false && application !== 'applied') {
+        throw new ManagerError('internal', `entry "${entryId}" could not be ${payload.enabled ? 'enabled' : 'disabled'} live (${String(application)}); restart the app and retry`);
+      }
+      if (payload.enabled && source.options.config !== null && typeof source.options.config === 'object') {
+        const name = source.options.config.serverName;
+        if (typeof name === 'string' && name !== '') await waitForToolRelease(name, 300);
+      }
+      return { servers: list() };
+    });
   }
 
   /**
@@ -770,6 +836,7 @@ function createMcpManager({ ctx, logger }) {
   return {
     list,
     external,
+    setExternalEnabled,
     takeover,
     save,
     remove,

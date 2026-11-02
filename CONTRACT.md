@@ -73,6 +73,7 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.toggle` | `{ id, enabled }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.reconnect` | `{ id }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.takeover` | `{ entryId }` | `{ ok: true, id, replaced: boolean, servers: ServerView[], warnings: string[] }` |
+| `/api/mcp-manager.toggle-external` | `{ entryId, enabled }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.ui` | `{ railEntry: boolean }` | `{ ok: true, servers: ServerView[], ui: UiState }` |
 
 `takeover` migrates one live `external` row into a managed record (or replaces the managed record
@@ -91,10 +92,14 @@ that opens a `main`-slot page keyed `mcp-manager`. Turning the preference off re
 registrations; the Settings page and the persisted data are unaffected.
 
 Every success response also carries `external: ExternalView[]` — the MCP servers owned by
-other *live* `@deepseek-ai/dsh-mcp-client` entries (bundle rows or `cordis.patch.yml` rows;
-disabled rows are omitted).
-This bundle shows them read-only: connecting them here as well would open a second connection
-and collide on `mcp__<server>__<tool>` names.
+other `@deepseek-ai/dsh-mcp-client` entries (bundle rows or `cordis.patch.yml` rows). Disabled
+rows are included so the page can switch them back on; `enabled` carries the state.
+The page can switch each one on or off through `pluginManager.setPluginEnabled(entryId, …)`
+(except a `shadowed` row: enabling it would collide with the managed record of the same name, so
+both the control and the route refuse) —
+ordinary profile state, not configuration — and offers **Migrate here** for taking the
+configuration over. Connecting a second copy without migrating would open two connections and
+collide on `mcp__<server>__<tool>` names.
 
 ```ts
 ExternalView = {
@@ -103,6 +108,7 @@ ExternalView = {
   transport?: "stdio" | "streamable-http"
   command?: string, args: string[], url?: string
   enabled: boolean           // entry.disabled === false
+  shadowed: boolean          // a managed record with this name exists; the switch is disabled
   toolCount: number          // live ctx.tools names starting with `mcp__<serverName>__`
 }
 ```

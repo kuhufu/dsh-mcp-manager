@@ -28,6 +28,7 @@ window.__ModuleLoader__.load({
       reconnect: 'api/mcp-manager.reconnect',
       takeover: 'api/mcp-manager.takeover',
       ui: 'api/mcp-manager.ui',
+      toggleExternal: 'api/mcp-manager.toggle-external',
     };
     /** Tool names are registered as `mcp__<server>__<tool>`; the UI only needs the prefix. */
     const TOOL_PREFIX = 'mcp__';
@@ -61,9 +62,12 @@ window.__ModuleLoader__.load({
       toolCount: 'Tools {count}',
       externalTitle: 'Configured as dsh-mcp-client entries',
       externalHint:
-        'These servers are separate @deepseek-ai/dsh-mcp-client entries from a bundle or cordis.patch.yml. This page shows them read-only: connecting them here too would open a second connection and collide on tool names. To manage one here, disable its entry and add it again on this page.',
+        'These servers are separate @deepseek-ai/dsh-mcp-client entries from a bundle or cordis.patch.yml. Switch one on or off here, or migrate it to this page to edit its configuration — connecting a second copy without migrating would collide on tool names.',
       externalActive: 'Active',
       takeover: 'Migrate here',
+      externalShadowed: 'Managed here',
+      externalShadowedHint:
+        '{name} is managed on this page, so its dsh-mcp-client row cannot be switched on — that would collide on tool names.',
       takeoverBusy: 'Migrating…',
       takeoverConfirm: 'Migrate "{name}" to this page and disable its dsh-mcp-client entry?',
       takeoverConfirmHint:
@@ -156,9 +160,12 @@ window.__ModuleLoader__.load({
       toolCount: '工具 {count}',
       externalTitle: '通过 dsh-mcp-client 配置的服务器',
       externalHint:
-        '这些服务器是 bundle 或 cordis.patch.yml 里独立的 @deepseek-ai/dsh-mcp-client 条目，本页只做只读展示：如果这里再连接一次会建立第二条连接并与已有工具命名冲突。想在本页管理，请先停用原条目，再在这里重新添加。',
+        '这些服务器是 bundle 或 cordis.patch.yml 里独立的 @deepseek-ai/dsh-mcp-client 条目：可以在这里直接启用/停用，或点「迁到此页」搬到本页以便改配置。直接再加一份连接会和已有工具命名冲突。',
       externalActive: '运行中',
       takeover: '迁到此页',
+      externalShadowed: '已在本页管理',
+      externalShadowedHint:
+        '「{name}」已由本页管理，不能再启用它的 dsh-mcp-client 条目，否则工具名会冲突。',
       takeoverBusy: '迁移中…',
       takeoverConfirm: '把「{name}」迁到本页，并停用它的 dsh-mcp-client 条目？',
       takeoverConfirmHint: '配置会复制到本页存储——包括环境变量和请求头，明文保存。',
@@ -773,12 +780,22 @@ window.__ModuleLoader__.load({
                     { className: 'dshmcp-meta' },
                     h('span', { className: 'dshmcp-chip' }, t(http ? 'shortHttp' : 'shortStdio')),
                     h('span', null, t('toolCount', { count: item.toolCount || 0 })),
+                    item.shadowed ? h('span', { className: 'dshmcp-chip' }, t('externalShadowed')) : null,
                     item.entryId ? h('span', { className: 'dshmcp-mono' }, item.entryId) : null,
                   ),
                 ),
                 h(
                   'div',
                   { className: 'dshmcp-actions' },
+                  h(SwitchButton, {
+                    checked: item.enabled !== false,
+                    busy,
+                    disabled: busy || item.shadowed === true,
+                    label: item.shadowed === true
+                      ? t('externalShadowedHint', { name })
+                      : t(item.enabled !== false ? 'disable' : 'enable', { name }),
+                    onChange: () => props.onToggle(item),
+                  }),
                   h(
                     'button',
                     {
@@ -1674,6 +1691,11 @@ window.__ModuleLoader__.load({
           await mutate(ROUTES.takeover, { entryId: item.entryId });
         });
 
+      const toggleExternal = (item) =>
+        run(item.entryId, async () => {
+          await mutate(ROUTES.toggleExternal, { entryId: item.entryId, enabled: !item.enabled });
+        });
+
       const setRailPreference = (next) => {
         if (railBusy) return;
         setRailBusy(true);
@@ -1802,7 +1824,7 @@ window.__ModuleLoader__.load({
                 ),
         external.length === 0
           ? null
-          : h(ExternalList, { t, items: external, busyId, onTakeover: takeoverServer }),
+          : h(ExternalList, { t, items: external, busyId, onTakeover: takeoverServer, onToggle: toggleExternal }),
         h(RailPreferenceRow, {
           t,
           checked: railEntry,

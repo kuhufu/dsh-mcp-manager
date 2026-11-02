@@ -37,7 +37,7 @@ const home = await mkdtemp(join(tmpdir(), 'dshmcp-external-'));
 process.env.DSH_HOME = home;
 
 const { apply } = await import('../index.js');
-const { LIST_PATH, TAKEOVER_PATH, UI_PATH } = await import('../host/routes.js');
+const { LIST_PATH, TAKEOVER_PATH, EXTERNAL_TOGGLE_PATH, UI_PATH } = await import('../host/routes.js');
 
 /** Tool schemas visible to the fake registry. */
 const schemas = [
@@ -88,12 +88,14 @@ const loader = {
   },
 };
 
-/** Plugin-manager stub: records calls and flips the source row's disabled flag. */
+/** Plugin-manager stub: records calls and flips the addressed row's disabled flag. */
 const pluginCalls = [];
+const rowsById = { [deepwiki.id]: deepwiki, [disabledRow.id]: disabledRow };
 const pluginManager = {
   async setPluginEnabled(id, enabled) {
     pluginCalls.push([id, enabled]);
-    if (id === deepwiki.id) deepwiki.disabled = !enabled;
+    const target = rowsById[id];
+    if (target !== undefined) target.disabled = !enabled;
     return { stage: 'enable', target: id, enabled, changed: true, application: 'applied', warnings: [] };
   },
 };
@@ -154,7 +156,10 @@ const ok = async (path, body) => {
 let list = await ok(LIST_PATH, {});
 assert.deepEqual(list.servers, [], 'no managed servers yet');
 assert.deepEqual(list.ui, { railEntry: true }, 'the list response carries the default ui preference');
-assert.equal(list.external.length, 1, 'only the live mcp-client row is external');
+assert.equal(list.external.length, 2, 'live and disabled mcp-client rows are both listed');
+const externalByName = new Map(list.external.map((item) => [item.serverName, item]));
+assert.equal(externalByName.get('web').enabled, false);
+assert.equal(externalByName.get('web').toolCount, 0);
 const [row] = list.external;
 assert.deepEqual(
   {
@@ -192,7 +197,8 @@ assert.equal(taken.servers[0].command, '/nonexistent-mcp-binary');
 assert.deepEqual(taken.servers[0].args, ['--flag']);
 assert.deepEqual(taken.servers[0].env, { TOKEN: 'hidden' }, 'the managed record owns the copied env');
 assert.equal(Array.isArray(taken.warnings) && taken.warnings.length, 1, 'copying env is reported');
-assert.equal(taken.external.length, 0, 'the disabled source leaves the external list');
+assert.equal(taken.external.length, 2, 'the disabled source stays listed as disabled');
+assert.equal(taken.external.find((item) => item.serverName === 'deepwiki').enabled, false);
 
 // The copied command does not exist, so the connection settles as an error.
 const deadline = Date.now() + 5000;
@@ -205,23 +211,47 @@ assert.equal(settled.status, 'error');
 assert.match(String(settled.error), /ENOENT|nonexistent/i);
 assert.deepEqual(registeredTools, [], 'a failed connection registers no tools');
 
+// A row whose name this page already manages is marked shadowed and cannot be
+// switched on: that would collide with the managed connection.
+const afterTakeover = await ok(LIST_PATH, {});
+const shadowedRow = afterTakeover.external.find((item) => item.serverName === 'deepwiki');
+assert.equal(shadowedRow.shadowed, true);
+const blocked = await call(EXTERNAL_TOGGLE_PATH, { entryId: deepwiki.id, enabled: true });
+assert.equal(blocked.payload.ok, false);
+assert.equal(blocked.payload.error.code, 'invalid');
+assert.equal(blocked.payload.error.field, 'enabled');
+
+// A foreign row with no managed twin can be switched on and off without migrating.
+// Foreign rows can be switched on and off without migrating them.
+const enabledWeb = await ok(EXTERNAL_TOGGLE_PATH, { entryId: disabledRow.id, enabled: true });
+assert.equal(enabledWeb.external.find((item) => item.serverName === 'web').enabled, true);
+assert.deepEqual(pluginCalls[pluginCalls.length - 1], [disabledRow.id, true]);
+const disabledAgain = await ok(EXTERNAL_TOGGLE_PATH, { entryId: disabledRow.id, enabled: false });
+assert.equal(disabledAgain.external.find((item) => item.serverName === 'web').enabled, false);
+const badToggle = await call(EXTERNAL_TOGGLE_PATH, { entryId: disabledRow.id });
+assert.equal(badToggle.payload.ok, false);
+assert.equal(badToggle.payload.error.code, 'invalid');
+assert.equal(badToggle.payload.error.field, 'enabled');
+
 // Migrating the same name again reuses the record: no duplicate-name failure.
 const again = await call(TAKEOVER_PATH, { entryId: row.entryId });
 assert.equal(again.payload.ok, true, JSON.stringify(again.payload));
 assert.equal(again.payload.replaced, true);
 assert.equal(again.payload.servers.length, 1, 'no duplicate record');
 assert.equal(again.payload.servers[0].id, taken.id, 'the existing record is reused');
-assert.deepEqual(pluginCalls, [['include:magpie-mcp-deepwiki', false]], 'an already-disabled source is not touched again');
+assert.deepEqual(pluginCalls.slice(0, 1), [['include:magpie-mcp-deepwiki', false]]);
+assert.equal(pluginCalls.filter(([id]) => id === deepwiki.id).length, 1, 'an already-disabled source is not touched again');
 
 // Unknown entries are a clean not-found and never disable anything.
+const callsBefore = pluginCalls.length;
 const { payload: missingPayload } = await call(TAKEOVER_PATH, { entryId: 'include:nope' });
 assert.equal(missingPayload.ok, false);
 assert.equal(missingPayload.error.code, 'not-found');
-assert.equal(pluginCalls.length, 1, 'a failed takeover never disables anything');
+assert.equal(pluginCalls.length, callsBefore, 'a failed takeover never disables anything');
 
 list = await ok(LIST_PATH, {});
 assert.equal(list.servers.length, 1);
-assert.equal(list.external.length, 0);
+assert.equal(list.external.length, 2);
 
 // The page preference is a plain persisted boolean; takeover never touches it.
 const uiOff = await ok(UI_PATH, { railEntry: false });

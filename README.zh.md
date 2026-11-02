@@ -17,11 +17,12 @@
 - **两种传输**：stdio（命令、参数、环境变量、工作目录）与 Streamable HTTP（URL、请求头）。
 - **实时状态**：已连接 / 连接中 / 失败（带服务器报错原文）、工具数、服务器版本、instructions、
   可展开的工具清单。
-- **外部条目可见但不重复连接**：已经在 `@deepseek-ai/dsh-mcp-client` 独立条目里配置的服务器，
-  会以只读形式列出（入口 id + 实时工具数）。点「迁到此页」会**先停用原条目**再把配置复制成
+- **外部条目可见、可开关、不重复连接**：已经在 `@deepseek-ai/dsh-mcp-client` 独立条目里配置的
+  服务器会列出来（入口 id + 实时工具数），可以在本页直接**启用/停用**（等同「设置 → 插件」里的
+  开关），也能一键迁移。点「迁到此页」会**先停用原条目**再把配置复制成
   本页记录并连接，所以不会出现两条连接抢同一批工具名。
 - **零依赖**：自带一个小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和
-  六条精确 Fetch 路由，无构建步骤。
+  八条精确 Fetch 路由，无构建步骤。
 
 ## 截图
 
@@ -90,6 +91,7 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 | 编辑 | 改配置后自动重启该连接；名称变更会换工具命名空间 |
 | 删除 | 断连 + 移除工具 + 删除记录（行内二次确认） |
 | 在左侧栏显示入口 | 安装/移除左侧栏入口；设置里的页面不受影响 |
+| 外部条目开关 | 直接启用/停用某条 `dsh-mcp-client` 配置，效果等同「设置 → 插件」；同名记录已被本页管理时标为「已在本页管理」并锁住开关，避免两边抢工具名 |
 
 **工具命名**：`mcp__<服务器名>__<原始工具名>`，非法字符替换为 `_`（如 `mix.content` →
 `mcp__mix_content`）。MCP 返回 `isError` 时调用失败并带出服务器文本；重连或重启会原子替换整批工具。
@@ -123,6 +125,7 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 | `list` | 本页管理的服务器 + 只读 `external` 行 + `ui` |
 | `save` / `remove` / `toggle` / `reconnect` | 服务器增删改与连接控制 |
 | `takeover` | 停用一条 `dsh-mcp-client` 条目并重新建成本页记录 |
+| `toggle-external` | 启用/停用某条 `dsh-mcp-client` 条目 |
 | `ui` | `railEntry` 偏好 |
 
 请求/响应结构、校验规则和工具桥接契约见 [CONTRACT.md](CONTRACT.md)。

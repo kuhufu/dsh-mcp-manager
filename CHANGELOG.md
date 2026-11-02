@@ -21,6 +21,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `POST /api/mcp-manager.ui`.
 - Dependency-free MCP client (stdio + Streamable HTTP), atomic JSON persistence
   and seven exact `POST /api/mcp-manager.*` routes.
+- The read-only foreign section now lists disabled `dsh-mcp-client` rows too, and each
+  row can be switched on or off in place (`/api/mcp-manager.toggle-external`), which is
+  the same profile state change as Settings → Plugins. A row whose name is already
+  managed here is marked `shadowed` and cannot be enabled, so the two connections can
+  never compete for one tool namespace.
 - Migrating a server whose name is already managed replaces that record in place
   (id preserved) instead of failing with `duplicate-name`, so a stuck row can be
   repaired by pressing **Migrate here** again.

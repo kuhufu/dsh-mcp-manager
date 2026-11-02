@@ -36,6 +36,7 @@ import {
   sanitizePublicName,
 } from '../host/mcp.js';
 import {
+  EXTERNAL_TOGGLE_PATH,
   LIST_PATH,
   RECONNECT_PATH,
   REMOVE_PATH,
@@ -610,7 +611,7 @@ async function main() {
     });
   });
 
-  await test('the seven Fetch routes match the pinned paths and failure shape', async () => {
+  await test('the eight Fetch routes match the pinned paths and failure shape', async () => {
     const view = { id: 's1', name: 'alpha', status: 'ready', tools: [], toolCount: 0 };
     let railEntry = true;
     const manager = {
@@ -633,44 +634,50 @@ async function main() {
     const routes = createFetchRoutes(manager);
     assert.deepEqual(
       routes.map((route) => route.path),
-      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, UI_PATH],
+      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, EXTERNAL_TOGGLE_PATH, UI_PATH],
     );
     for (const route of routes) {
       assert.deepEqual(route.methods, ['POST']);
       assert.equal(route.requestBody, 'buffered');
     }
 
-    const listResponse = await routes[0].fetch(jsonRequest({}));
+    const routeOf = (routePath) => {
+      const found = routes.find((route) => route.path === routePath);
+      assert.ok(found, `${routePath} exists`);
+      return found;
+    };
+
+    const listResponse = await routeOf(LIST_PATH).fetch(jsonRequest({}));
     assert.equal(listResponse.status, 200);
     assert.equal(listResponse.headers.get('cache-control'), 'no-store');
     assert.match(listResponse.headers.get('content-type') ?? '', /application\/json/);
     assert.deepEqual(await listResponse.json(), { ok: true, servers: [view], ui: { railEntry: true } });
 
-    const uiResponse = await routes[6].fetch(jsonRequest({ railEntry: false }));
+    const uiResponse = await routeOf(UI_PATH).fetch(jsonRequest({ railEntry: false }));
     assert.deepEqual(
       await uiResponse.json(),
       { ok: true, servers: [view], ui: { railEntry: false } },
       'the ui route persists and echoes the preference',
     );
-    const badUi = await routes[6].fetch(jsonRequest({ railEntry: 'yes' }));
+    const badUi = await routeOf(UI_PATH).fetch(jsonRequest({ railEntry: 'yes' }));
     assert.deepEqual((await badUi.json()).error, {
       code: 'invalid',
       message: 'railEntry must be a boolean',
       field: 'railEntry',
     });
-    const missingUi = await routes[6].fetch(jsonRequest({}));
+    const missingUi = await routeOf(UI_PATH).fetch(jsonRequest({}));
     assert.deepEqual((await missingUi.json()).error, {
       code: 'invalid',
       message: 'railEntry must be a boolean',
       field: 'railEntry',
     });
     assert.deepEqual(
-      (await (await routes[0].fetch(jsonRequest({}))).json()).ui,
+      (await (await routeOf(LIST_PATH).fetch(jsonRequest({}))).json()).ui,
       { railEntry: false },
       'other success payloads carry the stored preference',
     );
 
-    const malformed = await routes[1].fetch(
+    const malformed = await routeOf(SAVE_PATH).fetch(
       new Request('http://localhost/api/mcp-manager.save', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -682,28 +689,28 @@ async function main() {
     assert.equal(malformedBody.ok, false);
     assert.equal(malformedBody.error.code, 'invalid');
 
-    const duplicate = await routes[1].fetch(jsonRequest({ server: { name: 'dup' } }));
+    const duplicate = await routeOf(SAVE_PATH).fetch(jsonRequest({ server: { name: 'dup' } }));
     assert.equal(duplicate.status, 200);
     assert.deepEqual(await duplicate.json(), {
       ok: false,
       error: { code: 'duplicate-name', message: 'dup', field: 'name' },
     });
 
-    const noServer = await routes[1].fetch(jsonRequest({}));
+    const noServer = await routeOf(SAVE_PATH).fetch(jsonRequest({}));
     assert.deepEqual((await noServer.json()).error, {
       code: 'invalid',
       message: 'request body must include "server"',
       field: 'server',
     });
 
-    const badToggle = await routes[3].fetch(jsonRequest({ id: 's1', enabled: 'yes' }));
+    const badToggle = await routeOf(TOGGLE_PATH).fetch(jsonRequest({ id: 's1', enabled: 'yes' }));
     assert.deepEqual((await badToggle.json()).error, {
       code: 'invalid',
       message: 'enabled must be a boolean',
       field: 'enabled',
     });
 
-    const badRemove = await routes[2].fetch(jsonRequest({}));
+    const badRemove = await routeOf(REMOVE_PATH).fetch(jsonRequest({}));
     assert.deepEqual((await badRemove.json()).error, {
       code: 'invalid',
       message: 'request body must include a non-empty "id"',
@@ -780,11 +787,11 @@ async function main() {
   };
 
   let pluginServerId;
-  await test('apply registers the seven routes on ctx.connection.fetch', () => {
+  await test('apply registers the eight routes on ctx.connection.fetch', () => {
     apply(ctx);
     assert.deepEqual(
       [...routesByPath.keys()].sort(),
-      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, UI_PATH].sort(),
+      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, EXTERNAL_TOGGLE_PATH, UI_PATH].sort(),
     );
     assert.equal(effects.length, 2, 'lifecycle and routes effects are registered');
   });

@@ -21,11 +21,12 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
 - **Live status**: connected / connecting / failed (with the server's error text), tool count,
   server version, instructions, and the discovered tool list.
 - **Foreign entries are visible, not duplicated.** MCP servers already configured as separate
-  `@deepseek-ai/dsh-mcp-client` rows appear read-only, with their Entry id and live tool count.
+  `@deepseek-ai/dsh-mcp-client` rows appear with their Entry id and live tool count, and can be
+  switched on or off from this page without touching their configuration.
   **Migrate here** moves one over: it disables the source row first, then copies the config into
   this page and connects — so two connections never compete for the same tool names.
 - **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
-  atomic JSON persistence, and seven exact Fetch routes. No build step.
+  atomic JSON persistence, and eight exact Fetch routes. No build step.
 
 ## Screenshots
 
@@ -101,6 +102,7 @@ lock.
 | Edit | Saves and restarts that connection; renaming changes the tool namespace. |
 | Delete | Disconnects, unregisters the tools, removes the record (inline confirmation). |
 | Show in the sidebar | Installs or removes the left-rail entry; the Settings page is unaffected. |
+| Switch a `dsh-mcp-client` row | Enables or disables that row — the same effect as Settings → Plugins, without leaving the page. A row whose name is already managed here is marked **Managed here** and its switch is locked, since enabling both would collide on tool names. |
 
 **Tool naming.** Tools are registered as `mcp__<serverName>__<rawToolName>`, with every character
 outside `[A-Za-z0-9_-]` replaced by `_` (so `mix.content` becomes `mcp__mix_content`). An MCP
@@ -138,6 +140,7 @@ All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
 | `list` | Managed servers + read-only `external` rows + `ui` |
 | `save` / `remove` / `toggle` / `reconnect` | Server mutations |
 | `takeover` | Disable a `dsh-mcp-client` entry and re-create it as a managed record |
+| `toggle-external` | Enable or disable a `dsh-mcp-client` entry |
 | `ui` | The `railEntry` preference |
 
 `CONTRACT.md` pins the request/response shapes, validation rules and tool-bridge contract.

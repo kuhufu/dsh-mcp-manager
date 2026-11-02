@@ -30,6 +30,8 @@ export const TOGGLE_PATH = '/api/mcp-manager.toggle';
 export const RECONNECT_PATH = '/api/mcp-manager.reconnect';
 /** Absolute path of the takeover route for a dsh-mcp-client entry. */
 export const TAKEOVER_PATH = '/api/mcp-manager.takeover';
+/** Absolute path of the enable/disable route for a dsh-mcp-client entry. */
+export const EXTERNAL_TOGGLE_PATH = '/api/mcp-manager.toggle-external';
 /** Absolute path of the page-preference route (`ui.railEntry`). */
 export const UI_PATH = '/api/mcp-manager.ui';
 
@@ -41,6 +43,7 @@ export const ROUTE_PATHS = Object.freeze([
   TOGGLE_PATH,
   RECONNECT_PATH,
   TAKEOVER_PATH,
+  EXTERNAL_TOGGLE_PATH,
   UI_PATH,
 ]);
 
@@ -108,6 +111,16 @@ export function createFetchRoutes(manager, options = {}) {
         servers: result.servers,
         warnings: result.warnings,
       };
+    }, logger),
+    route(manager, EXTERNAL_TOGGLE_PATH, async (body) => {
+      if (typeof body.entryId !== 'string' || body.entryId === '') {
+        throw new ManagerError('invalid', 'request body must include a non-empty "entryId"', 'entryId');
+      }
+      if (typeof body.enabled !== 'boolean') {
+        throw new ManagerError('invalid', 'enabled must be a boolean', 'enabled');
+      }
+      const result = await manager.setExternalEnabled({ entryId: body.entryId, enabled: body.enabled });
+      return { ok: true, servers: result.servers };
     }, logger),
     route(manager, UI_PATH, async (body) => {
       // The manager owns the boolean rule; a missing or non-boolean value is an
