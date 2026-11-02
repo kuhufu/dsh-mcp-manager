@@ -23,6 +23,18 @@
 - **零依赖**：自带一个小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和
   六条精确 Fetch 路由，无构建步骤。
 
+## 截图
+
+设置 → MCP 服务器：一台在线服务器的状态、端点、工具数与版本，内容末尾的虚线添加行，以及控制
+第二个入口的「在左侧栏显示入口」开关。
+
+<img src="docs/screenshots/settings.png" width="760" alt="设置里的 MCP 服务器页面">
+
+同一个页面从左栏打开——左栏图标是本插件自己的，两处渲染完全一致。
+
+<img src="docs/screenshots/rail-panel.png" width="880" alt="左侧栏面板里的 MCP 服务器页面">
+
+
 ## 安装
 
 需要一个提供 Cordis Fetch 路由与插槽 API 的 Harness 构建（开发与验证基于 `0.2.1-rc.5`）。

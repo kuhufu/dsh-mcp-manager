@@ -27,6 +27,19 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
 - **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
   atomic JSON persistence, and seven exact Fetch routes. No build step.
 
+## Screenshots
+
+Settings → MCP servers: a live server with its status, endpoint, tool count and version, the
+dashed add row, and the sidebar-entry preference that controls the second surface.
+
+<img src="docs/screenshots/settings.png" width="760" alt="MCP servers page in Settings">
+
+The same page opened from the left rail — the rail icon is this plugin's own, and the page
+renders identically in both places.
+
+<img src="docs/screenshots/rail-panel.png" width="880" alt="MCP servers page as a left-rail panel">
+
+
 ## Install
 
 Requires a Harness build that ships the Cordis Fetch-route and slot APIs used here
