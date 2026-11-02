@@ -32,19 +32,52 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
 Requires a Harness build that ships the Cordis Fetch-route and slot APIs used here
 (developed and tested against `0.2.1-rc.5`).
 
-From the Plugins page of the Harness Web UI, install the bundle with the package spec — for a
-local checkout, install the checkout directory instead (it is linked, so edits are picked up):
+### Web UI (desktop app or `dsh web`)
 
-```
-@kuhufu/dsh-mcp-manager
+1. Open **Settings → Plugins → Add plugin**.
+2. Enter `@kuhufu/dsh-mcp-manager` and click **Install**.
+3. Confirm the bundle is enabled in the plugin list — installation and enablement are separate,
+   so an installed bundle that is switched off loads nothing.
+
+For a Git checkout, use the CLI below instead of the wizard: it installs the directory as a
+link, so local edits apply on the next reload.
+
+### `dsh` CLI
+
+```sh
+# install into a CLI profile (`web`, `tui`, or your own profile name)
+dsh plugin --profile web add @kuhufu/dsh-mcp-manager
+
+# update to the latest published version
+dsh plugin --profile web update @kuhufu/dsh-mcp-manager@latest
+
+# uninstall
+dsh plugin --profile web remove @kuhufu/dsh-mcp-manager
 ```
 
-The bundle ships one Loader row (`mcp-manager`) and one browser module; enabling the bundle is
-enough, there is no configuration file to write. Install it in a profile whose Web UI is
-running, then open **Settings → MCP servers**, or click the new icon in the left rail.
+Afterwards start the UI (`dsh web`) and enable the bundle in **Settings → Plugins** if it is not
+enabled yet. A checkout installs the same way:
+
+```sh
+git clone https://github.com/kuhufu/dsh-mcp-manager.git
+cd dsh-mcp-manager && cd ..
+dsh plugin --profile web add ./dsh-mcp-manager   # relative paths are resolved from here
+```
+
+### Desktop app profile
+
+The desktop app owns the `desktop` profile. Open the app once so the profile exists, **fully
+quit** it, then run:
+
+```sh
+dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
+```
+
+and start the app again. Running the plugin command while the app is up can race its profile
+lock.
 
 > The npm name `dsh-mcp-manager` belongs to an unrelated project, so this plugin publishes under
-> the `@kuhufu` scope. If the package is not on npm yet, install from a Git checkout.
+> the `@kuhufu` scope. Until it is published there, install from a Git checkout as shown above.
 
 ## Usage
 

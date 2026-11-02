@@ -27,18 +27,46 @@
 
 需要一个提供 Cordis Fetch 路由与插槽 API 的 Harness 构建（开发与验证基于 `0.2.1-rc.5`）。
 
-在 Harness Web UI 的插件页用包名安装；本地开发时直接把仓库目录作为安装目标（目录会被链接，
-改动即时生效）：
+### Web UI（桌面端或 `dsh web`）
 
-```
-@kuhufu/dsh-mcp-manager
+1. 打开 **设置 → 插件 → 添加插件**；
+2. 填 `@kuhufu/dsh-mcp-manager`，点 **安装**；
+3. 在插件列表里确认 bundle 已**启用**——安装和启用是两步，装好但没启用的 bundle 不会加载任何东西。
+
+从源码安装请改用下面的命令行：它会把目录作为 link 装进去，改动在重新加载后生效。
+
+### `dsh` 命令行
+
+```sh
+# 安装到命令行 profile（web / tui / 你自己的 profile 名）
+dsh plugin --profile web add @kuhufu/dsh-mcp-manager
+
+# 升级到已发布的最新版本
+dsh plugin --profile web update @kuhufu/dsh-mcp-manager@latest
+
+# 卸载
+dsh plugin --profile web remove @kuhufu/dsh-mcp-manager
 ```
 
-bundle 只声明一个 Loader 行（`mcp-manager`）和一个浏览器模块，启用即生效，没有需要手写的配置。
-安装后打开 **设置 → MCP 服务器**，或点击左侧栏新增的图标。
+装完启动 UI（`dsh web`），如果 bundle 还没启用，到 **设置 → 插件** 里打开。从源码安装同理：
+
+```sh
+git clone https://github.com/kuhufu/dsh-mcp-manager.git
+dsh plugin --profile web add ./dsh-mcp-manager   # 相对路径按当前目录解析
+```
+
+### 桌面端 profile
+
+桌面应用独占 `desktop` 这个 profile：先打开一次应用让 profile 初始化，然后**完全退出**应用，再执行
+
+```sh
+dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
+```
+
+最后重新打开应用。应用运行期间跑插件命令可能和它的 profile 锁竞争。
 
 > npm 上的 `dsh-mcp-manager` 属于另一个无关项目，所以本插件发布在 `@kuhufu` scope 下。
-> 如果还没发布到 npm，请从 Git 仓库安装。
+> 在它发布到 npm 之前，按上面的方式从 Git 检出安装。
 
 ## 使用
 
