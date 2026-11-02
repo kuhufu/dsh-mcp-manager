@@ -156,6 +156,23 @@ node test/takeover-race.smoke.mjs   # 8 checks: the asynchronous tool release du
 Both suites are framework-free: they drive the real modules over real stdio/HTTP transports
 (and a real fake MCP server), and assert that every spawned process is reaped.
 
+## Troubleshooting
+
+**`Connection failed — tool "mcp__X__y" is already registered`**
+Another MCP connection already owns that tool name, usually a `@deepseek-ai/dsh-mcp-client` row
+with the same `serverName`. Do not add a second copy by hand: open the read-only
+"Configured as dsh-mcp-client entries" list and press **Migrate here**. It disables the source
+row first, waits for its tools to be released, and only then connects — so the two connections
+never compete. If the conflicting server is not in that list, find and disable its entry under
+Settings → Plugins first, then reconnect this row.
+
+**The page is missing after installing** — install and enable are two steps. Enable the bundle in
+Settings → Plugins, then reload the window.
+
+**The Settings navigation icon is a gear** — the Harness shell maps navigation icons by section id,
+so a third-party Settings section always gets the fallback gear. This plugin's own icon is the
+left-rail entry; the preference switch at the bottom of the page controls it.
+
 ## Limitations
 
 - MCP image/audio results are not persisted; non-text blocks are surfaced as text diagnostics.
