@@ -17,7 +17,7 @@
  * @module @kuhufu/dsh-mcp-manager
  */
 
-import { repairDuplicateRow } from './host/profile-patch.js';
+import { patchIdOf, repairDuplicateRow } from './host/profile-patch.js';
 import { connect, buildToolDefinitions } from './host/mcp.js';
 import { createFetchRoutes } from './host/routes.js';
 import {
@@ -682,7 +682,7 @@ function createMcpManager({ ctx, logger }) {
       ? profile.patchPath
       : undefined;
     if (patchPath === undefined) return false;
-    const result = await repairDuplicateRow(patchPath, entryId, enabled);
+    const result = await repairDuplicateRow(patchPath, patchIdOf(entryId), enabled);
     if (!result.repaired) {
       if (typeof result.reason === 'string') warn(`could not repair "${entryId}": ${result.reason}`);
       return false;

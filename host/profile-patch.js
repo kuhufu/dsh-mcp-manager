@@ -30,8 +30,8 @@ const ID_KEY = /^ {2}id:\s*(?:"([^"]*)"|'([^']*)'|([^#\s]+))\s*(?:#.*)?$/;
 const ID_IN_START = /^-\s+id:\s*(?:"([^"]*)"|'([^']*)'|([^#\s]+))\s*(?:#.*)?$/;
 /** A row nested inside an `insert:` entry. */
 const NESTED_ID_KEY = /^ {4}- id:\s*(?:"([^"]*)"|'([^']*)'|([^#\s]+))\s*(?:#.*)?$/;
-/** An `insert` key, either as the entry's first line or nested in it. */
-const INSERT_KEY = /^(?:-\s+|\s+)insert:\s*$/;
+/** An `insert` key, either as the entry's first line or nested in it (a comment may follow). */
+const INSERT_KEY = /^(?:-\s+|\s+)insert:\s*(?:#.*)?$/;
 
 /**
  * Split a patch document into its top-level sequence entries.
@@ -82,6 +82,21 @@ function isBareOverride(entry) {
   return entry.insert === false
     && entry.id !== undefined
     && entry.keys.every((key) => key === 'id' || key === 'disabled');
+}
+
+/**
+ * Map a Loader entry id to its patch row id.
+ *
+ * Included rows are addressed as `include:<patchId>` in the Loader while the
+ * profile patch declares them under `<patchId>` alone, so a repair called with a
+ * Loader id has to strip the scope prefix first.
+ *
+ * @param {string} entryId - Loader entry id, e.g. `include:magpie-mcp-github`.
+ * @returns {string} the id the profile patch uses.
+ */
+export function patchIdOf(entryId) {
+  const prefix = 'include:';
+  return entryId.startsWith(prefix) ? entryId.slice(prefix.length) : entryId;
 }
 
 /**

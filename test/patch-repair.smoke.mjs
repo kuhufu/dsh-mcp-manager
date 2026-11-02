@@ -12,7 +12,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { repairDuplicateRow } from '../host/profile-patch.js';
+import { patchIdOf, repairDuplicateRow } from '../host/profile-patch.js';
 
 const home = await mkdtemp(path.join(tmpdir(), 'dshmcp-patch-'));
 const patchPath = path.join(home, 'cordis.patch.yml');
@@ -73,8 +73,23 @@ assert.equal(refused.repaired, false);
 assert.equal(refused.reason, 'no stale override row to remove');
 assert.equal(await readFile(patchPath, 'utf8'), doubleInserts);
 
+// Loader ids carry the `include:` scope that the patch itself does not.
+assert.equal(patchIdOf('include:magpie-mcp-github'), 'magpie-mcp-github');
+assert.equal(patchIdOf('magpie-mcp-github'), 'magpie-mcp-github');
+await writeFile(patchPath, broken);
+const scoped = await repairDuplicateRow(patchPath, patchIdOf('include:magpie-mcp-GitHub'), false);
+assert.equal(scoped.repaired, true, 'a Loader entry id is mapped before the repair');
+assert.match(await readFile(patchPath, 'utf8'), /- id: "magpie-mcp-GitHub"\n {2}disabled: true\n$/);
+
+// The magpie-style `- insert: # comment` header is still an insert.
+const commented = `- id: magpie-mcp-github\n  disabled: true\n- insert: # magpie\n    - id: magpie-mcp-github\n      name: x\n      config:\n        serverName: "github"\n`;
+await writeFile(patchPath, commented);
+const commentedRepair = await repairDuplicateRow(patchPath, 'magpie-mcp-github', false);
+assert.equal(commentedRepair.repaired, true, 'an insert header with a trailing comment is recognised');
+assert.match(await readFile(patchPath, 'utf8'), /- id: "magpie-mcp-github"\n {2}disabled: true\n$/);
+
 // A missing file is a refusal, not a crash.
 assert.equal((await repairDuplicateRow(path.join(home, 'absent.yml'), 'x', true)).repaired, false);
 
 await rm(home, { recursive: true, force: true });
-console.log('patch repair smoke: 16 checks passed, 0 failed');
+console.log('patch repair smoke: 23 checks passed, 0 failed');
