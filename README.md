@@ -150,6 +150,7 @@ Plain ESM, no build step, no dependencies. Node 22+.
 node --check index.js && node --check client.js
 node test/mcp.smoke.mjs        # 29 checks: transports, store, routes, full plugin lifecycle
 node test/external.smoke.mjs   # 54 checks: foreign entries, migration, ui preference
+node test/takeover-race.smoke.mjs   # 8 checks: the asynchronous tool release during a migration
 ```
 
 Both suites are framework-free: they drive the real modules over real stdio/HTTP transports

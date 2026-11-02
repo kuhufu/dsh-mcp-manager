@@ -574,6 +574,38 @@ function createMcpManager({ ctx, logger }) {
   }
 
   /**
+   * Wait until nothing still registers `mcp__<serverName>__*`.
+   *
+   * Disabling a Loader row releases its tools asynchronously; migrating the
+   * server before that lands would collide on the shared tool names. The wait
+   * is bounded: on timeout the migration continues and the registration error
+   * reports the conflict.
+   *
+   * @param {string} serverName - tool namespace of the migrated server.
+   * @param {number} timeoutMs - upper bound for the wait.
+   * @returns {Promise<void>} settles when the namespace is free or the bound is hit.
+   */
+  async function waitForToolRelease(serverName, timeoutMs) {
+    if (typeof serverName !== 'string' || serverName === '') return;
+    const prefix = `mcp__${serverName}__`;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      let busy = false;
+      try {
+        const schemas = ctx.tools !== undefined && typeof ctx.tools.schemas === 'function' ? ctx.tools.schemas() : [];
+        busy = Array.isArray(schemas)
+          && schemas.some((schema) => schema !== null && typeof schema === 'object'
+            && typeof schema.name === 'string' && schema.name.startsWith(prefix));
+      } catch {
+        busy = false;
+      }
+      if (!busy) return;
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  }
+
+  /**
    * Describe the MCP servers owned by other `@deepseek-ai/dsh-mcp-client` entries.
    *
    * The page manages this bundle's own records only, so the whole deployment
@@ -696,6 +728,9 @@ function createMcpManager({ ctx, logger }) {
           }
           throw new ManagerError('internal', `entry "${entryId}" could not be disabled live (${String(application)}); restart the app and retry`);
         }
+        // The source's tools leave the registry asynchronously; wait them out so
+        // our registration cannot collide with the connections being torn down.
+        await waitForToolRelease(input.name, 3000);
       }
       try {
         await store.setServers([...current, record]);

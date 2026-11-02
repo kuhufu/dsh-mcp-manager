@@ -26,3 +26,5 @@ jobs:
         run: node test/mcp.smoke.mjs
       - name: Foreign-entry and migration suite
         run: node test/external.smoke.mjs
+      - name: Migration race suite
+        run: node test/takeover-race.smoke.mjs

@@ -21,6 +21,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `POST /api/mcp-manager.ui`.
 - Dependency-free MCP client (stdio + Streamable HTTP), atomic JSON persistence
   and seven exact `POST /api/mcp-manager.*` routes.
-- Two framework-free test suites: `test/mcp.smoke.mjs` (29 checks, real stdio
-  and HTTP transports, full plugin lifecycle) and `test/external.smoke.mjs`
-  (54 checks, foreign entries and migration).
+- Migration waits, bounded at 3 s, for the source entry's tool namespace to be
+  released before connecting, so a takeover cannot collide with the connections
+  being torn down; a duplicate-name failure now also explains itself in the UI.
+- Three framework-free test suites: `test/mcp.smoke.mjs` (29 checks, real stdio
+  and HTTP transports, full plugin lifecycle), `test/external.smoke.mjs`
+  (54 checks, foreign entries and migration) and `test/takeover-race.smoke.mjs`
+  (8 checks, the asynchronous tool release during a migration).

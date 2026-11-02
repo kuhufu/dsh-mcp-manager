@@ -135,6 +135,7 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 node --check index.js && node --check client.js
 node test/mcp.smoke.mjs        # 29 项：传输、存储、路由、整插件生命周期
 node test/external.smoke.mjs   # 54 项：外部条目、一键接管、ui 偏好
+node test/takeover-race.smoke.mjs   # 8 项：接管时旧连接的异步释放竞态
 ```
 
 两套测试都不依赖框架：驱动真实模块跑真实 stdio/HTTP 传输与假 MCP 服务器，并断言所有子进程

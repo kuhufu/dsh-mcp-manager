@@ -78,6 +78,8 @@ window.__ModuleLoader__.load({
       instructions: 'Server instructions',
       lastError: 'Last error',
       errorLine: '{label}: {message}',
+      duplicateHint:
+        'Another MCP connection already owns these tool names. Disable that entry (or migrate it here from the read-only list below) and press reconnect.',
       labelCwd: 'Working directory',
       labelConnected: 'Connected',
       enable: 'Enable {name}',
@@ -170,6 +172,8 @@ window.__ModuleLoader__.load({
       instructions: '服务器说明',
       lastError: '最近错误',
       errorLine: '{label}：{message}',
+      duplicateHint:
+        '同一批工具名已被另一条 MCP 连接占用：先停用那条条目（或在下方只读列表里点「迁到此页」接管），再点重连。',
       labelCwd: '工作目录',
       labelConnected: '连接时间',
       enable: '启用 {name}',
@@ -1074,10 +1078,17 @@ window.__ModuleLoader__.load({
         ),
         server.status === 'error' && server.error
           ? h(
-              'p',
-              { className: 'dshmcp-row-error' },
-              h(Icon, { name: 'alert', size: 14 }),
-              h('span', null, t('errorLine', { label: t('lastError'), message: server.error })),
+              React.Fragment,
+              null,
+              h(
+                'p',
+                { className: 'dshmcp-row-error' },
+                h(Icon, { name: 'alert', size: 14 }),
+                h('span', null, t('errorLine', { label: t('lastError'), message: server.error })),
+              ),
+              /already registered/i.test(String(server.error))
+                ? h('p', { className: 'dshmcp-hint' }, t('duplicateHint'))
+                : null,
             )
           : null,
         props.expanded ? h(ServerDetails, { t, server, id: detailsId }) : null,
