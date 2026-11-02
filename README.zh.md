@@ -1,6 +1,6 @@
 # dsh-mcp-manager
 
-![icon](icon.svg)
+<img src="icon.svg" width="64" height="64" alt="dsh-mcp-manager icon">
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 增加 MCP 服务器管理：
 在界面里增删改查 **Model Context Protocol** 服务器，把它们的工具注册成模型可直接调用的

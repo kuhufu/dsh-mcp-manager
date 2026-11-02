@@ -1,6 +1,6 @@
 # dsh-mcp-manager
 
-![icon](icon.svg)
+<img src="icon.svg" width="64" height="64" alt="dsh-mcp-manager icon">
 
 MCP server management for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 manage **Model Context Protocol** servers from the Web UI and get their tools as native
