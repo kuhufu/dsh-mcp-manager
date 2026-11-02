@@ -129,6 +129,10 @@ window.__ModuleLoader__.load({
       errLineFormat: 'Line {line}: expected KEY=VALUE.',
       errLineKey: 'Line {line}: names may contain only letters, digits and underscores.',
       errLineHeader: 'Line {line}: header names may not contain spaces or separators.',
+      errOverridden:
+        'This row is declared more than once in the profile patch, so the profile layer cannot change it. Remove the duplicate entry, or move the disabled row after its insert.',
+      errOverridden:
+        '这条配置在 profile patch 里被声明了两次（一个禁用的覆盖行写在后面的 insert 之前），profile 层改不动它。删掉重复条目，或把禁用行挪到 insert 之后。',
       errNetwork: 'Could not reach the host service.',
       errInternal: 'The host reported an error.',
       errLoad: 'Could not load the server list.',
@@ -292,6 +296,7 @@ window.__ModuleLoader__.load({
     function explain(error, t) {
       if (error instanceof ApiError) {
         if (error.code === 'network') return t('errNetwork');
+        if (error.code === 'overridden') return t('errOverridden');
         if (error.message) return error.message;
         return t('errInternal');
       }

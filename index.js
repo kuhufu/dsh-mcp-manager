@@ -659,6 +659,25 @@ function createMcpManager({ ctx, logger }) {
   }
 
   /**
+   * Build the failure for a row another layer keeps re-declaring.
+   *
+   * A profile patch can hold both a `disabled: true` override and a later
+   * `insert` for the same id. `pluginManager.setPluginEnabled` updates the
+   * override in place, so the later insert still wins and reports `overridden`;
+   * the loader, not this plugin, decides that outcome.
+   *
+   * @param {string} entryId - Loader row id.
+   * @param {boolean} enabled - requested state.
+   * @returns {ManagerError} failure carrying the `overridden` code.
+   */
+  function overriddenFailure(entryId, enabled) {
+    return new ManagerError(
+      'overridden',
+      `entry "${entryId}" is declared more than once in the profile patch, so the profile cannot ${enabled ? 'enable' : 'disable'} it: remove the duplicate row or move the disabled row after the insert`,
+    );
+  }
+
+  /**
    * Enable or disable one `@deepseek-ai/dsh-mcp-client` row.
    *
    * The page must not edit another bundle's rows as configuration, but switching
@@ -710,7 +729,8 @@ function createMcpManager({ ctx, logger }) {
       }
       const change = await manager.setPluginEnabled(entryId, payload.enabled);
       const application = change === null || change === undefined ? 'applied' : change.application;
-      if (change !== null && change !== undefined && change.changed !== false && application !== 'applied') {
+      if (application === 'overridden') throw overriddenFailure(entryId, payload.enabled);
+      if (application !== 'applied') {
         throw new ManagerError('internal', `entry "${entryId}" could not be ${payload.enabled ? 'enabled' : 'disabled'} live (${String(application)}); restart the app and retry`);
       }
       if (payload.enabled && source.options.config !== null && typeof source.options.config === 'object') {
@@ -790,6 +810,8 @@ function createMcpManager({ ctx, logger }) {
         const application = change === null || change === undefined ? 'applied' : change.application;
         if (change !== null && change !== undefined && change.changed === false) {
           // Already off; nothing to undo.
+        } else if (application === 'overridden') {
+          throw overriddenFailure(entryId, false);
         } else if (application !== 'applied') {
           try {
             await manager.setPluginEnabled(entryId, true);

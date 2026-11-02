@@ -174,6 +174,12 @@ first, then reconnect this row.
 **The page is missing after installing** — install and enable are two steps. Enable the bundle in
 Settings → Plugins, then reload the window.
 
+**A `dsh-mcp-client` switch does nothing / the row stays enabled** — that row is declared more than
+once in the profile patch: a `disabled: true` override sitting *before* a later `insert` of the same
+id is updated in place by the Plugin Manager, while the later insert keeps winning (the route
+answers `overridden`). Remove the duplicate row, or move the disabled row after the insert, then
+reload the profile.
+
 **The Settings navigation icon is a gear** — the Harness shell maps navigation icons by section id,
 so a third-party Settings section always gets the fallback gear. This plugin's own icon is the
 left-rail entry; the preference switch at the bottom of the page controls it.

@@ -92,8 +92,13 @@ const loader = {
 const pluginCalls = [];
 const rowsById = { [deepwiki.id]: deepwiki, [disabledRow.id]: disabledRow };
 const pluginManager = {
+  /** When set, the next writes report a higher-priority layer winning. */
+  overridden: false,
   async setPluginEnabled(id, enabled) {
     pluginCalls.push([id, enabled]);
+    if (this.overridden) {
+      return { stage: 'enable', target: id, enabled, changed: false, application: 'overridden', warnings: [] };
+    }
     const target = rowsById[id];
     if (target !== undefined) target.disabled = !enabled;
     return { stage: 'enable', target: id, enabled, changed: true, application: 'applied', warnings: [] };
@@ -232,6 +237,14 @@ const badToggle = await call(EXTERNAL_TOGGLE_PATH, { entryId: disabledRow.id });
 assert.equal(badToggle.payload.ok, false);
 assert.equal(badToggle.payload.error.code, 'invalid');
 assert.equal(badToggle.payload.error.field, 'enabled');
+
+// A row the profile layer cannot control reports `overridden`, not a silent no-op.
+pluginManager.overridden = true;
+const blockedByLayer = await call(EXTERNAL_TOGGLE_PATH, { entryId: disabledRow.id, enabled: true });
+assert.equal(blockedByLayer.payload.ok, false);
+assert.equal(blockedByLayer.payload.error.code, 'overridden');
+assert.match(blockedByLayer.payload.error.message, /declared more than once/);
+pluginManager.overridden = false;
 
 // Migrating the same name again reuses the record: no duplicate-name failure.
 const again = await call(TAKEOVER_PATH, { entryId: row.entryId });

@@ -26,6 +26,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same profile state change as Settings → Plugins. A row whose name is already
   managed here is marked `shadowed` and cannot be enabled, so the two connections can
   never compete for one tool namespace.
+- Enabling/disabling a foreign row that the profile patch declares twice now fails with
+  `overridden` (and a localized explanation) instead of a generic internal error.
 - Migrating a server whose name is already managed replaces that record in place
   (id preserved) instead of failing with `duplicate-name`, so a stuck row can be
   repaired by pressing **Migrate here** again.

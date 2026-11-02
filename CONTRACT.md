@@ -113,10 +113,13 @@ ExternalView = {
 }
 ```
 
+`overridden` means another layer keeps re-declaring the addressed row (a `disabled: true` override
+before a later `insert` in the same profile patch), so profile-level enablement cannot win.
+
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
 ```json
-{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "internal",
+{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "internal",
                           "message": "…", "field": "name?" } }
 ```
 
