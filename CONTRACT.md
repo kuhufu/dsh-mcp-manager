@@ -72,11 +72,12 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.remove` | `{ id }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.toggle` | `{ id, enabled }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.reconnect` | `{ id }` | `{ ok: true, servers: ServerView[] }` |
-| `/api/mcp-manager.takeover` | `{ entryId }` | `{ ok: true, id, servers: ServerView[], warnings: string[] }` |
+| `/api/mcp-manager.takeover` | `{ entryId }` | `{ ok: true, id, replaced: boolean, servers: ServerView[], warnings: string[] }` |
 | `/api/mcp-manager.ui` | `{ railEntry: boolean }` | `{ ok: true, servers: ServerView[], ui: UiState }` |
 
-`takeover` migrates one live `external` row into a managed record: it validates the copied
-configuration, disables the source Loader entry through `pluginManager.setPluginEnabled`
+`takeover` migrates one live `external` row into a managed record (or replaces the managed record
+with the same `name`, keeping its id, so a broken row can be repaired in place): it validates the
+copied configuration, disables the source Loader entry through `pluginManager.setPluginEnabled`
 first (so its tools and child process are gone before this bundle registers the same
 `mcp__<server>__<tool>` names), then persists and connects the new record. A failure after the
 source was disabled re-enables it; a validation failure touches nothing. `warnings` reports

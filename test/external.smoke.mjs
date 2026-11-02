@@ -205,6 +205,14 @@ assert.equal(settled.status, 'error');
 assert.match(String(settled.error), /ENOENT|nonexistent/i);
 assert.deepEqual(registeredTools, [], 'a failed connection registers no tools');
 
+// Migrating the same name again reuses the record: no duplicate-name failure.
+const again = await call(TAKEOVER_PATH, { entryId: row.entryId });
+assert.equal(again.payload.ok, true, JSON.stringify(again.payload));
+assert.equal(again.payload.replaced, true);
+assert.equal(again.payload.servers.length, 1, 'no duplicate record');
+assert.equal(again.payload.servers[0].id, taken.id, 'the existing record is reused');
+assert.deepEqual(pluginCalls, [['include:magpie-mcp-deepwiki', false]], 'an already-disabled source is not touched again');
+
 // Unknown entries are a clean not-found and never disable anything.
 const { payload: missingPayload } = await call(TAKEOVER_PATH, { entryId: 'include:nope' });
 assert.equal(missingPayload.ok, false);

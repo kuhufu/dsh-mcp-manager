@@ -101,7 +101,13 @@ export function createFetchRoutes(manager, options = {}) {
         throw new ManagerError('invalid', 'request body must include a non-empty "entryId"', 'entryId');
       }
       const result = await manager.takeover({ entryId: body.entryId });
-      return { ok: true, id: result.id, servers: result.servers, warnings: result.warnings };
+      return {
+        ok: true,
+        id: result.id,
+        replaced: result.replaced === true,
+        servers: result.servers,
+        warnings: result.warnings,
+      };
     }, logger),
     route(manager, UI_PATH, async (body) => {
       // The manager owns the boolean rule; a missing or non-boolean value is an

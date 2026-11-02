@@ -163,8 +163,10 @@ Another MCP connection already owns that tool name, usually a `@deepseek-ai/dsh-
 with the same `serverName`. Do not add a second copy by hand: open the read-only
 "Configured as dsh-mcp-client entries" list and press **Migrate here**. It disables the source
 row first, waits for its tools to be released, and only then connects — so the two connections
-never compete. If the conflicting server is not in that list, find and disable its entry under
-Settings → Plugins first, then reconnect this row.
+never compete. Migrating onto a name this page already manages replaces that record in place
+(the id is kept), which is the way to repair a row that is stuck in this error state. If the
+conflicting server is not in the list, find and disable its entry under Settings → Plugins
+first, then reconnect this row.
 
 **The page is missing after installing** — install and enable are two steps. Enable the bundle in
 Settings → Plugins, then reload the window.

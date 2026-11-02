@@ -21,6 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `POST /api/mcp-manager.ui`.
 - Dependency-free MCP client (stdio + Streamable HTTP), atomic JSON persistence
   and seven exact `POST /api/mcp-manager.*` routes.
+- Migrating a server whose name is already managed replaces that record in place
+  (id preserved) instead of failing with `duplicate-name`, so a stuck row can be
+  repaired by pressing **Migrate here** again.
 - Migration waits, bounded at 3 s, for the source entry's tool namespace to be
   released before connecting, so a takeover cannot collide with the connections
   being torn down; a duplicate-name failure now also explains itself in the UI.

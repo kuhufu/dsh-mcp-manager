@@ -708,8 +708,12 @@ function createMcpManager({ ctx, logger }) {
         headers: config.headers,
       };
       const current = store.list();
-      const validated = validateServerInput(input, { servers: current });
-      const record = buildServerRecord(validated, {});
+      // Migrating onto a name this page already manages replaces that record in
+      // place: the user's intent is to fix/repoint the server, not to fail on a
+      // duplicate or to leave two records with the same tool namespace.
+      const existing = current.find((server) => server.name === input.name);
+      const validated = validateServerInput(input, { servers: current, id: existing === undefined ? undefined : existing.id });
+      const record = buildServerRecord(validated, existing === undefined ? {} : { existing });
       const manager = typeof ctx.get === 'function' ? ctx.get('pluginManager') : undefined;
       if (manager === undefined || manager === null || typeof manager.setPluginEnabled !== 'function') {
         throw new ManagerError('unsupported', 'plugin management is not available in this deployment');
@@ -733,7 +737,10 @@ function createMcpManager({ ctx, logger }) {
         await waitForToolRelease(input.name, 3000);
       }
       try {
-        await store.setServers([...current, record]);
+        const next = existing === undefined
+          ? [...current, record]
+          : current.map((server) => (server.id === record.id ? record : server));
+        await store.setServers(next);
       } catch (error) {
         if (wasEnabled) {
           try {
@@ -751,7 +758,12 @@ function createMcpManager({ ctx, logger }) {
       if (env.length > 0 || headers.length > 0) {
         warnings.push(`copied ${env.length} environment value(s) and ${headers.length} header(s) into this page's storage as plain text`);
       }
-      return { id: record.id, servers: list(), warnings };
+      return {
+        id: record.id,
+        replaced: existing !== undefined,
+        servers: list(),
+        warnings,
+      };
     });
   }
 
