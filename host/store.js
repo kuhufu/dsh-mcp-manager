@@ -43,13 +43,26 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** HTTP header name rule (RFC 9110 token, deliberately permissive). */
 export const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
-/** Machine-readable failure codes shared with the HTTP routes. */
-export const ERROR_CODES = Object.freeze(['invalid', 'duplicate-name', 'not-found', 'internal']);
+/**
+ * Every machine-readable failure code the Host can put on the wire.
+ *
+ * `invalid`/`duplicate-name`/`not-found`/`internal` originate here;
+ * `overridden` and `unsupported` come from the Loader/profile layer
+ * (`host/profile-patch.js` and `index.js`) when a row cannot be switched.
+ */
+export const ERROR_CODES = Object.freeze([
+  'invalid',
+  'duplicate-name',
+  'not-found',
+  'overridden',
+  'unsupported',
+  'internal',
+]);
 
 /** Failure carrying a stable wire code, a human message and an optional field. */
 export class ManagerError extends Error {
   /**
-   * @param {'invalid'|'duplicate-name'|'not-found'|'internal'} code - stable wire code.
+   * @param {'invalid'|'duplicate-name'|'not-found'|'overridden'|'unsupported'|'internal'} code - stable wire code.
    * @param {string} message - human-readable explanation shown by the Client.
    * @param {string} [field] - offending request field, when there is one.
    */
