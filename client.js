@@ -131,8 +131,6 @@ window.__ModuleLoader__.load({
       errLineHeader: 'Line {line}: header names may not contain spaces or separators.',
       errOverridden:
         'This row is declared more than once in the profile patch, so the profile layer cannot change it. Remove the duplicate entry, or move the disabled row after its insert.',
-      errOverridden:
-        '这条配置在 profile patch 里被声明了两次（一个禁用的覆盖行写在后面的 insert 之前），profile 层改不动它。删掉重复条目，或把禁用行挪到 insert 之后。',
       errNetwork: 'Could not reach the host service.',
       errInternal: 'The host reported an error.',
       errLoad: 'Could not load the server list.',
@@ -225,6 +223,8 @@ window.__ModuleLoader__.load({
       optional: '可选',
       errName: '请使用 1–32 个字母、数字、下划线或短横线。',
       errNameDuplicate: '已有其他服务器使用该名称。',
+      errOverridden:
+        '这条配置在 profile patch 里被声明了两次（一个禁用的覆盖行写在后面的 insert 之前），profile 层改不动它。删掉重复条目，或把禁用行挪到 insert 之后。',
       errCommand: '请填写要启动的命令。',
       errUrl: '请填写以 http:// 或 https:// 开头的完整地址。',
       errLineFormat: '第 {line} 行：应为 KEY=VALUE 格式。',
@@ -791,7 +791,7 @@ window.__ModuleLoader__.load({
                 ),
                 h(
                   'div',
-                  { className: 'dshmcp-actions' },
+                  { className: 'dshmcp-actions dshmcp-actions-spaced' },
                   h(SwitchButton, {
                     checked: item.enabled !== false,
                     busy,
@@ -810,7 +810,16 @@ window.__ModuleLoader__.load({
                       'aria-busy': busy ? 'true' : undefined,
                       onClick: () => setConfirmId(item.entryId),
                     },
-                    busy ? t('takeoverBusy') : t('takeover'),
+                    h(
+                      'span',
+                      { className: 'dshmcp-btn-stack' },
+                      h('span', null, busy ? t('takeoverBusy') : t('takeover')),
+                      h(
+                        'span',
+                        { className: 'dshmcp-btn-ghost', 'aria-hidden': 'true' },
+                        busy ? t('takeover') : t('takeoverBusy'),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -1877,6 +1886,9 @@ window.__ModuleLoader__.load({
 .dshmcp-btn[data-variant=danger]{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}
 .dshmcp-btn[data-variant=danger]:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 16%,transparent)}
 .dshmcp-btn-small{height:28px;padding:0 10px;font-size:12px;line-height:18px;border-radius:var(--dsw-radius-sm)}
+.dshmcp-btn-stack{display:inline-grid;justify-items:center}
+.dshmcp-btn-stack>*{grid-area:1/1;white-space:nowrap}
+.dshmcp-btn-ghost{visibility:hidden}
 .dshmcp-icon-btn{box-sizing:border-box;width:28px;height:28px;padding:0;border-radius:var(--dsw-radius-sm);border:0;background:transparent;color:var(--dsw-alias-label-secondary);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
 .dshmcp-icon-btn:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-label-primary) 7%,transparent);color:var(--dsw-alias-label-primary)}
 .dshmcp-icon-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
@@ -1920,6 +1932,7 @@ window.__ModuleLoader__.load({
 .dshmcp-chip{border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);padding:0 5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:16px;text-transform:lowercase}
 .dshmcp-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
 .dshmcp-actions{display:flex;align-items:center;gap:2px;flex:none}
+.dshmcp-actions-spaced{gap:10px}
 .dshmcp-spinner{position:absolute;top:50%;left:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;border:1.5px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;animation:dshmcp-spin .8s linear infinite;pointer-events:none}
 .dshmcp-switch{position:relative;box-sizing:border-box;width:36px;height:20px;padding:0;border-radius:999px;border:.5px solid var(--dsw-alias-border-l3);background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background .15s ease,border-color .15s ease}
 .dshmcp-switch::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transform:translateY(-50%);transition:left .15s ease}
