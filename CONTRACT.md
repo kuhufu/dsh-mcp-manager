@@ -73,7 +73,7 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.toggle` | `{ id, enabled }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.reconnect` | `{ id }` | `{ ok: true, servers: ServerView[] }` |
 | `/api/mcp-manager.takeover` | `{ entryId }` | `{ ok: true, id, replaced: boolean, servers: ServerView[], warnings: string[] }` |
-| `/api/mcp-manager.toggle-external` | `{ entryId, enabled }` | `{ ok: true, servers: ServerView[] }` |
+| `/api/mcp-manager.toggle-external` | `{ entryId, enabled }` | `{ ok: true, repaired: boolean, servers: ServerView[] }` |
 | `/api/mcp-manager.ui` | `{ railEntry: boolean }` | `{ ok: true, servers: ServerView[], ui: UiState }` |
 
 `takeover` migrates one live `external` row into a managed record (or replaces the managed record
@@ -113,8 +113,14 @@ ExternalView = {
 }
 ```
 
-`overridden` means another layer keeps re-declaring the addressed row (a `disabled: true` override
-before a later `insert` in the same profile patch), so profile-level enablement cannot win.
+`overridden` means the Plugin Manager updated an override that a later `insert` of the same id
+still outranks (a `disabled: true` row before the insert). The route does not stop there: it
+rewrites the enablement itself with `host/profile-patch.js` — the stale `id`/`disabled`-only rows
+for that id are dropped, the declaration carrying the configuration is kept, and a final
+`- id: …` / `disabled: true` row is appended so the last declaration wins. The patch is backed up
+as `cordis.patch.yml.bak-<timestamp>` first, only that exact shape is touched (anything else keeps
+the `overridden` failure), and the response carries `repaired: true`. The migration performs the
+same repair when it cannot disable its source row.
 
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 

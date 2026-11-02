@@ -120,7 +120,7 @@ export function createFetchRoutes(manager, options = {}) {
         throw new ManagerError('invalid', 'enabled must be a boolean', 'enabled');
       }
       const result = await manager.setExternalEnabled({ entryId: body.entryId, enabled: body.enabled });
-      return { ok: true, servers: result.servers };
+      return { ok: true, repaired: result.repaired === true, servers: result.servers };
     }, logger),
     route(manager, UI_PATH, async (body) => {
       // The manager owns the boolean rule; a missing or non-boolean value is an

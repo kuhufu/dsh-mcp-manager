@@ -158,8 +158,9 @@ node test/takeover-race.smoke.mjs   # 8 项：接管时旧连接的异步释放�
 
 **外部条目的开关点了没反应 / 一直是启用状态**——这条配置在 profile patch 里被声明了两次：一个
 `disabled: true` 的覆盖行写在同 id 的 `insert` **之前**，插件管理只会原地改那个覆盖行，后面的
-insert 仍然生效（接口返回 `overridden`）。删掉重复的那条，或把禁用行挪到 insert 之后，再重载
-profile 即可。
+insert 仍然生效。插件现在会自己修：删掉那条只含 `id`/`disabled` 的过期覆盖行，保留带配置的
+声明，并在文件末尾补一条决定性的 `disabled` 行（最后声明生效），同时在 patch 旁留一份
+`cordis.patch.yml.bak-<时间戳>` 备份。其它重复形态不会硬猜，仍然返回 `overridden`。
 
 **设置导航里是齿轮图标**——宿主按 section id 映射导航图标，第三方设置页只能是回退的齿轮图标；
 本插件自己的图标在左侧栏入口上，由页面底部的开关控制。

@@ -174,11 +174,13 @@ first, then reconnect this row.
 **The page is missing after installing** — install and enable are two steps. Enable the bundle in
 Settings → Plugins, then reload the window.
 
-**A `dsh-mcp-client` switch does nothing / the row stays enabled** — that row is declared more than
+**A `dsh-mcp-client` switch does nothing / the row stays enabled** — the row is declared more than
 once in the profile patch: a `disabled: true` override sitting *before* a later `insert` of the same
-id is updated in place by the Plugin Manager, while the later insert keeps winning (the route
-answers `overridden`). Remove the duplicate row, or move the disabled row after the insert, then
-reload the profile.
+id is updated in place by the Plugin Manager, while the later insert keeps winning. The plugin
+repairs that shape itself: it drops the stale override-only rows, keeps the declaration that carries
+the configuration, appends a final `disabled` row so the last declaration wins, and leaves a
+`cordis.patch.yml.bak-<timestamp>` backup beside the patch. Other duplicate shapes are refused with
+the `overridden` error rather than guessed at.
 
 **The Settings navigation icon is a gear** — the Harness shell maps navigation icons by section id,
 so a third-party Settings section always gets the fallback gear. This plugin's own icon is the

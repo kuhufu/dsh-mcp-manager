@@ -28,3 +28,5 @@ jobs:
         run: node test/external.smoke.mjs
       - name: Migration race suite
         run: node test/takeover-race.smoke.mjs
+      - name: Profile patch repair suite
+        run: node test/patch-repair.smoke.mjs

@@ -17,6 +17,7 @@
  * @module @kuhufu/dsh-mcp-manager
  */
 
+import { repairDuplicateRow } from './host/profile-patch.js';
 import { connect, buildToolDefinitions } from './host/mcp.js';
 import { createFetchRoutes } from './host/routes.js';
 import {
@@ -659,6 +660,67 @@ function createMcpManager({ ctx, logger }) {
   }
 
   /**
+   * Rewrite the profile patch when one row is declared twice.
+   *
+   * The Host's Plugin Manager updates the last override row in place, so a later
+   * `insert` of the same id keeps winning. Rewriting the enablement at the end of
+   * the sequence is the only way to make the request effective; the helper keeps a
+   * backup and refuses shapes it does not understand.
+   *
+   * @param {string} entryId - Loader row id.
+   * @param {boolean} enabled - requested state.
+   * @returns {Promise<boolean>} whether the patch was rewritten.
+   */
+  async function repairEntry(entryId, enabled) {
+    let profile;
+    try {
+      profile = typeof ctx.get === 'function' ? ctx.get('profileContext') : undefined;
+    } catch {
+      profile = undefined;
+    }
+    const patchPath = profile !== undefined && profile !== null && typeof profile.patchPath === 'string'
+      ? profile.patchPath
+      : undefined;
+    if (patchPath === undefined) return false;
+    const result = await repairDuplicateRow(patchPath, entryId, enabled);
+    if (!result.repaired) {
+      if (typeof result.reason === 'string') warn(`could not repair "${entryId}": ${result.reason}`);
+      return false;
+    }
+    warn(`repaired duplicate declarations for "${entryId}"; backup at ${String(result.backup)}`);
+    return true;
+  }
+
+  /**
+   * Wait until the Loader reflects the requested enablement of one row.
+   *
+   * @param {string} entryId - Loader row id.
+   * @param {boolean} enabled - requested state.
+   * @param {number} timeoutMs - upper bound.
+   * @returns {Promise<boolean>} whether the state was observed.
+   */
+  async function waitForEntryState(entryId, enabled, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        const loader = typeof ctx.get === 'function' ? ctx.get('loader') : undefined;
+        if (loader !== undefined && typeof loader.entries === 'function') {
+          for (const entry of loader.entries()) {
+            if (entry !== null && entry !== undefined && entry.id === entryId) {
+              if ((entry.disabled !== true) === enabled) return true;
+              break;
+            }
+          }
+        }
+      } catch {
+        // fall through to the next poll
+      }
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  }
+
+  /**
    * Build the failure for a row another layer keeps re-declaring.
    *
    * A profile patch can hold both a `disabled: true` override and a later
@@ -729,7 +791,11 @@ function createMcpManager({ ctx, logger }) {
       }
       const change = await manager.setPluginEnabled(entryId, payload.enabled);
       const application = change === null || change === undefined ? 'applied' : change.application;
-      if (application === 'overridden') throw overriddenFailure(entryId, payload.enabled);
+      if (application === 'overridden') {
+        if (!await repairEntry(entryId, payload.enabled)) throw overriddenFailure(entryId, payload.enabled);
+        await waitForEntryState(entryId, payload.enabled, 3000);
+        return { servers: list(), repaired: true };
+      }
       if (application !== 'applied') {
         throw new ManagerError('internal', `entry "${entryId}" could not be ${payload.enabled ? 'enabled' : 'disabled'} live (${String(application)}); restart the app and retry`);
       }
@@ -811,7 +877,8 @@ function createMcpManager({ ctx, logger }) {
         if (change !== null && change !== undefined && change.changed === false) {
           // Already off; nothing to undo.
         } else if (application === 'overridden') {
-          throw overriddenFailure(entryId, false);
+          if (!await repairEntry(entryId, false)) throw overriddenFailure(entryId, false);
+          await waitForEntryState(entryId, false, 3000);
         } else if (application !== 'applied') {
           try {
             await manager.setPluginEnabled(entryId, true);
