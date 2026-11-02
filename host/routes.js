@@ -56,7 +56,7 @@ class BodyError extends Error {
 }
 
 /**
- * Build the seven Fetch route descriptors for a manager.
+ * Build the eight Fetch route descriptors for a manager.
  *
  * @param {{
  *   list: () => object[],

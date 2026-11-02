@@ -158,12 +158,13 @@ Plain ESM, no build step, no dependencies. Node 22+.
 
 ```bash
 node --check index.js && node --check client.js
-node test/mcp.smoke.mjs        # 29 checks: transports, store, routes, full plugin lifecycle
-node test/external.smoke.mjs   # 54 checks: foreign entries, migration, ui preference
-node test/takeover-race.smoke.mjs   # 8 checks: the asynchronous tool release during a migration
+node test/mcp.smoke.mjs            # 29 checks: transports, store, routes, full plugin lifecycle
+node test/external.smoke.mjs       # 93 checks: foreign entries, migration, ui preference
+node test/takeover-race.smoke.mjs  # 8 checks: the asynchronous tool release during a migration
+node test/patch-repair.smoke.mjs   # 23 checks: repairing a row the profile patch declares twice
 ```
 
-Both suites are framework-free: they drive the real modules over real stdio/HTTP transports
+All four suites are framework-free: they drive the real modules over real stdio/HTTP transports
 (and a real fake MCP server), and assert that every spawned process is reaped.
 
 ## Troubleshooting

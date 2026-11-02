@@ -8,7 +8,7 @@
  *   (server records plus the `ui.railEntry` page preference).
  * - `host/mcp.js` speaks stdio/Streamable-HTTP MCP and shapes MCP tools into
  *   Harness `ToolDefinition`s.
- * - `host/routes.js` serves the seven exact `POST /api/mcp-manager.*` routes the
+ * - `host/routes.js` serves the eight exact `POST /api/mcp-manager.*` routes the
  *   Settings page consumes.
  *
  * Tool registrations and MCP child processes are owned by `apply`'s effects:

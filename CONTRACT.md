@@ -125,7 +125,7 @@ same repair when it cannot disable its source row.
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
 ```json
-{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "internal",
+{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "unsupported" | "internal",
                           "message": "…", "field": "name?" } }
 ```
 
@@ -192,19 +192,29 @@ ctx.slots.inject("settings.section", () => ctx.slots.register({
   focus moves to the first field) with the fields for the chosen transport.
   Args are edited one per line; env and headers as `KEY=VALUE` lines.
 - Delete asks for confirmation inside the row/modal before calling the Host.
-- Only `--dsw-alias-*` theme tokens (see list below); class names prefixed `dshmcp-`.
+- Only the `--dsw-*` theme tokens listed below; class names prefixed `dshmcp-`.
   Render the `<style>` element inside the root component (unmounting removes it).
 - All visible text goes through `t(...)`; dictionaries cover English and Simplified Chinese.
 - After every mutation, render the `servers` array from the response. Poll `.list` every 5 s
   while mounted (cleared on unmount) so `connecting`/`error` states settle.
 
-### Available theme tokens
+### Theme tokens
 
-`--dsw-alias-bg-base`, `--dsw-alias-bg-layer-1`, `--dsw-alias-bg-layer-2`,
-`--dsw-alias-bg-overlay`, `--dsw-alias-border-l1`, `--dsw-alias-border-l2`,
-`--dsw-alias-brand-primary`, `--dsw-alias-label-primary`, `--dsw-alias-label-secondary`,
-`--dsw-alias-state-error-primary`, `--dsw-alias-state-idle-primary`,
-`--dsw-alias-state-success-primary`, `--dsw-alias-state-warn-primary`.
+The page reads only these variables, all supplied by the Harness theme; tints and veils are
+derived from them with `color-mix()`, so light and dark both follow.
+
+Colour: `--dsw-alias-bg-base`, `--dsw-alias-bg-layer-1`, `--dsw-alias-bg-layer-2`,
+`--dsw-alias-bg-mask-1`, `--dsw-alias-bg-module-platform`, `--dsw-alias-border-l1`,
+`--dsw-alias-border-l2`, `--dsw-alias-border-l3`, `--dsw-alias-brand-primary`,
+`--dsw-alias-button-primary-fill`, `--dsw-alias-button-primary-hover`,
+`--dsw-alias-interactive-bg-hover`, `--dsw-alias-label-primary`,
+`--dsw-alias-label-primary-foreground`, `--dsw-alias-label-secondary`,
+`--dsw-alias-state-business-primary`, `--dsw-alias-state-error-primary`,
+`--dsw-alias-state-idle-primary`, `--dsw-alias-state-success-primary`,
+`--dsw-alias-state-warn-primary`, `--dsw-focus-ring-color`.
+
+Geometry and depth: `--dsw-radius-sm`, `--dsw-radius-md`, `--dsw-radius-lg`,
+`--dsw-radius-panel`, `--dsw-elevation-prominent`, `--dsw-mask-blur`.
 
 ## Constraints
 
