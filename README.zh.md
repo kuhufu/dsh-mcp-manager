@@ -35,6 +35,13 @@
 
 <img src="docs/screenshots/rail-panel.png" width="880" alt="左侧栏面板里的 MCP 服务器页面">
 
+加一台服务器要么给一条命令行（stdio），要么给一个地址；两个弹窗都会校验工具命名空间，
+避免两台服务器在 `mcp__<名称>__<工具>` 上撞名。
+
+| 添加服务器（stdio） | 编辑服务器（HTTP） |
+| --- | --- |
+| <img src="docs/screenshots/dialog-stdio.png" width="360" alt="添加 MCP 服务器弹窗（stdio 字段）"> | <img src="docs/screenshots/dialog-http.png" width="420" alt="编辑 MCP 服务器弹窗（URL 与请求头）"> |
+
 
 ## 安装
 

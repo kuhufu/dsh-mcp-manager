@@ -40,6 +40,13 @@ renders identically in both places.
 
 <img src="docs/screenshots/rail-panel.png" width="880" alt="MCP servers page as a left-rail panel">
 
+Adding a server takes either a command line (stdio) or a URL; both dialogs validate the tool
+namespace so two servers can never collide on `mcp__<name>__<tool>`.
+
+| Add a server (stdio) | Edit a server (HTTP) |
+| --- | --- |
+| <img src="docs/screenshots/dialog-stdio.png" width="360" alt="Add MCP server dialog with stdio fields"> | <img src="docs/screenshots/dialog-http.png" width="420" alt="Edit MCP server dialog with URL and headers"> |
+
 
 ## Install
 
