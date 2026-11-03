@@ -34,6 +34,14 @@ export const TAKEOVER_PATH = '/api/mcp-manager.takeover';
 export const EXTERNAL_TOGGLE_PATH = '/api/mcp-manager.toggle-external';
 /** Absolute path of the page-preference route (`ui.railEntry`). */
 export const UI_PATH = '/api/mcp-manager.ui';
+/** Absolute path of the batch configuration import route. */
+export const IMPORT_PATH = '/api/mcp-manager.import';
+/** Absolute path of the configuration export route. */
+export const EXPORT_PATH = '/api/mcp-manager.export';
+/** Absolute path of the storage recovery route. */
+export const RECOVER_PATH = '/api/mcp-manager.recover';
+/** Absolute path of the individual tool enablement route. */
+export const TOOL_PATH = '/api/mcp-manager.tool';
 
 /** Every path this bundle owns, in registration order. */
 export const ROUTE_PATHS = Object.freeze([
@@ -45,7 +53,47 @@ export const ROUTE_PATHS = Object.freeze([
   TAKEOVER_PATH,
   EXTERNAL_TOGGLE_PATH,
   UI_PATH,
+  IMPORT_PATH,
+  EXPORT_PATH,
+  RECOVER_PATH,
+  TOOL_PATH,
 ]);
+
+/**
+ * Flatten one persisted record plus its runtime entry into the `ServerView`
+ * the Client renders.
+ * @param {object} server - persisted record.
+ * @param {object|undefined} state - internal runtime state, treated as read-only.
+ * @returns {object} view with flattened runtime fields.
+ */
+export function serverView(server, state) {
+  /** @type {Record<string, unknown>} */
+  const view = { ...server };
+  if (state === undefined) {
+    view.status = 'stopped';
+    view.tools = [];
+    view.toolCount = 0;
+    return view;
+  }
+  view.status = state.status;
+  if (state.error !== undefined) view.error = state.error;
+  view.tools = state.tools.map((tool) => ({
+    name: tool.name,
+    publicName: tool.publicName,
+    enabled: tool.enabled,
+    ...(tool.description === undefined ? {} : { description: tool.description }),
+  }));
+  view.toolCount = state.toolCount;
+  view.logs = state.logs.map((entry) => ({ ...entry }));
+  view.retryAttempt = state.retryAttempt;
+  view.nextRetryAt = state.nextRetryAt;
+  view.protocolVersion = state.connection?.protocolVersion;
+  if (state.serverInfo !== undefined) view.serverInfo = { ...state.serverInfo };
+  if (state.instructions !== undefined) view.instructions = state.instructions;
+  if (state.connectedAt !== undefined) view.connectedAt = state.connectedAt;
+  return view;
+}
+
 
 /** Failure raised for a request body that is not a JSON object. */
 class BodyError extends Error {
@@ -56,18 +104,9 @@ class BodyError extends Error {
 }
 
 /**
- * Build the eight Fetch route descriptors for a manager.
+ * Build the twelve Fetch route descriptors for a manager.
  *
- * @param {{
- *   list: () => object[],
- *   save: (payload: { id?: string, server: unknown }) => Promise<{ id: string, servers: object[] }>,
- *   remove: (payload: { id: string }) => Promise<{ servers: object[] }>,
- *   toggle: (payload: { id: string, enabled: boolean }) => Promise<{ servers: object[] }>,
- *   reconnect: (payload: { id: string }) => Promise<{ servers: object[] }>,
- *   takeover: (payload: { entryId: string }) => Promise<{ id: string, servers: object[], warnings: string[] }>,
- *   ui?: () => { railEntry: boolean },
- *   setUi?: (payload: { railEntry: boolean }) => Promise<{ servers: object[], ui: { railEntry: boolean } }>,
- * }} manager - Host manager the routes delegate to.
+ * @param {ReturnType<import('./manager.js').createMcpManager>} manager - complete Host manager interface.
  * @param {{ logger?: { error?: (message: string) => void } }} [options] - diagnostics sink.
  * @returns {object[]} descriptors accepted by `ctx.connection.fetch.register`.
  */
@@ -128,6 +167,10 @@ export function createFetchRoutes(manager, options = {}) {
       const result = await manager.setUi({ railEntry: body.railEntry });
       return { ok: true, servers: result.servers, ui: result.ui };
     }, logger),
+    route(manager, IMPORT_PATH, async (body) => ({ ok: true, ...await manager.importServers(body) }), logger),
+    route(manager, EXPORT_PATH, async (body) => ({ ok: true, document: manager.exportServers(body) }), logger),
+    route(manager, RECOVER_PATH, async (body) => ({ ok: true, ...await manager.recoverStorage(body) }), logger),
+    route(manager, TOOL_PATH, async (body) => ({ ok: true, ...await manager.setToolEnabled({ ...body, id: requireId(body) }) }), logger),
   ];
 }
 
@@ -145,7 +188,7 @@ function requireId(body) {
 
 /**
  * Wrap one handler as an exact Fetch route descriptor.
- * @param {object} manager - Host manager (its `ready` promise, when present, gates every request).
+ * @param {object} manager - Host manager; `ready()` gates every request.
  * @param {string} path - absolute route path.
  * @param {(body: object) => Promise<object>} handle - JSON-in/JSON-out handler.
  * @param {{ error?: (message: string) => void }|undefined} logger - diagnostics sink.
@@ -157,7 +200,7 @@ function route(manager, path, handle, logger) {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      if (typeof manager.ready === 'function') await manager.ready();
+      await manager.ready();
       let body;
       try {
         body = await readJsonObject(request);
@@ -171,9 +214,7 @@ function route(manager, path, handle, logger) {
         const payload = await handle(body);
         // Every success response also carries the read-only foreign rows and
         // the current page preference, so one response can drive the page.
-        let enriched = payload;
-        if (typeof manager.external === 'function') enriched = { ...enriched, external: manager.external() };
-        if (typeof manager.ui === 'function') enriched = { ...enriched, ui: manager.ui() };
+        const enriched = { ...payload, external: manager.external(), ui: manager.ui(), storage: manager.storage() };
         return jsonResponse(200, enriched);
       } catch (error) {
         const failure = toFailure(error, logger, path);

@@ -18,15 +18,27 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Syntax check
+        run: npm run check
+      - name: Tests
+        run: npm test
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated browser test dependencies
         run: |
-          for file in index.js client.js host/*.js test/*.mjs; do
-            node --check "$file"
-          done
-      - name: Host suite
-        run: node test/mcp.smoke.mjs
-      - name: Foreign-entry and migration suite
-        run: node test/external.smoke.mjs
-      - name: Migration race suite
-        run: node test/takeover-race.smoke.mjs
-      - name: Profile patch repair suite
-        run: node test/patch-repair.smoke.mjs
+          python3 -m venv .qa/venv
+          .qa/venv/bin/pip install -r test/browser-requirements.txt
+          .qa/venv/bin/python -m playwright install --with-deps chromium
+          curl -fsSL https://unpkg.com/react@18.3.1/umd/react.development.js -o .qa/react.js
+          curl -fsSL https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js -o .qa/react-dom.js
+      - name: Browser interactions
+        run: npm run test:browser

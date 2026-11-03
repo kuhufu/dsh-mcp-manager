@@ -7,20 +7,24 @@ registers their tools on `ctx.tools`, and serves the page's data over exact Fetc
 Both halves are plain JavaScript (no build step). The Client half is a browser bundle in the
 `window.__ModuleLoader__.load({ id, factory(require) })` format and may only `require('react')`.
 
-## File ownership (do not edit files outside your scope)
+## Module boundaries
 
-| Path | Owner |
-|---|---|
-| `index.js`, `host/mcp.js`, `host/store.js`, `host/routes.js`, `test/**` | host teammate |
-| `client.js` | client teammate |
-| `package.json`, `cordis.patch.yml`, `locale/*.json`, `icon.svg`, `CONTRACT.md` | Lead |
+- `index.js`: plugin activation and route registration.
+- `host/manager.js`: serialized configuration operations and store ownership.
+- `host/runtime.js`: connections, bounded retries, tool registrations and activity.
+- `host/external.js`: Loader entry enablement and migration.
+- `host/profile-patch.js`: targeted profile-patch repair with a backup.
+- `host/errors.js`: shared Host diagnostic formatting.
+- `host/mcp.js`, `host/store.js`, `host/routes.js`: transport, persistence and wire adapters.
+- `client.js`: one browser factory containing a data hook and React components for recovery,
+  transfer and presentation; these are logical boundaries within the same distributable file.
 
 ## Persistence
 
 Host-owned JSON at `<DSH_HOME>/storages/mcp-manager.json` (`DSH_HOME` env, else `~/.dsh`):
 
 ```json
-{ "version": 1, "servers": [ Server ] }
+{ "version": 1, "servers": [ Server ], "ui": { "railEntry": true } }
 ```
 
 `Server` (persisted):
@@ -38,10 +42,24 @@ Host-owned JSON at `<DSH_HOME>/storages/mcp-manager.json` (`DSH_HOME` env, else 
   url?: string          // http: full URL
   headers?: Record<string, string> // http
   createdAt: number
+  requestTimeoutMs?: number     // integer 1000–600000; default 60000
+  initializeTimeoutMs?: number  // integer 1000–300000; default 30000
+  retryCount?: number           // integer 0–10; default 0 (no automatic retries)
+  disabledTools?: string[]      // raw names; preserved across reconnect/list changes
 }
 ```
 
-Writes are atomic (`writeFile` to a temp sibling + `rename`) and serialized.
+Writes are serialized and atomic (exclusive `0600` temporary file, fsync, rename).
+Memory is committed only after persistence succeeds. The previous valid file is atomically
+saved to `mcp-manager.json.bak` before replacement. Missing files start empty; corrupt,
+unreadable and unsupported-version files expose an empty view with
+`storage.readOnly: true` and reject writes. Legacy unversioned documents and documents without
+`ui` migrate to version 1 on the next successful write. Other versions require explicit recovery.
+Invalid or duplicate individual records are skipped with warnings; valid records remain usable.
+`storage.skippedRecords` reports the skipped count. Before replacing such a document, archive
+its original bytes so tolerated bad records are not silently discarded.
+Recovery archives the original bytes in `mcp-manager.json.recovery-<time>-<uuid>` before restoring
+the validated backup or resetting to defaults. No damaged document is silently overwritten.
 
 ## Runtime status (not persisted)
 
@@ -51,11 +69,15 @@ Per server, the Host keeps:
 {
   status: "stopped" | "connecting" | "ready" | "error",
   error?: string,                     // human-readable last failure
-  tools: { name: string, description?: string }[],  // raw MCP tool names
+  tools: { name: string, publicName: string, enabled: boolean, description?: string }[],
   toolCount: number,
   serverInfo?: { name?: string, version?: string },
   instructions?: string,              // first 4000 chars, may be absent
-  connectedAt?: number
+  connectedAt?: number,
+  protocolVersion?: string,
+  retryAttempt?: number,
+  nextRetryAt?: number,
+  logs?: { time: number, level: "info" | "error", message: string }[] // bounded recent activity
 }
 ```
 
@@ -75,6 +97,21 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.takeover` | `{ entryId }` | `{ ok: true, id, replaced: boolean, servers: ServerView[], warnings: string[] }` |
 | `/api/mcp-manager.toggle-external` | `{ entryId, enabled }` | `{ ok: true, repaired: boolean, servers: ServerView[] }` |
 | `/api/mcp-manager.ui` | `{ railEntry: boolean }` | `{ ok: true, servers: ServerView[], ui: UiState }` |
+| `/api/mcp-manager.import` | `{ document }` | `{ ok: true, imported: number, servers: ServerView[] }` |
+| `/api/mcp-manager.export` | `{ includeSecrets?: boolean }` | `{ ok: true, document: { version: 1, servers: ServerInput[] } }` |
+| `/api/mcp-manager.recover` | `{ mode: "backup" | "reset" }` | `{ ok: true, servers: ServerView[], archive?: string }` |
+| `/api/mcp-manager.tool` | `{ id, name: string, enabled: boolean }` | `{ ok: true, servers: ServerView[] }` |
+
+Every success response includes `storage: { readOnly: boolean, hasBackup: boolean, error?: string, skippedRecords?: number }`.
+`storage-readonly` is a stable failure code for attempts to overwrite a damaged document.
+Imports accept an array, `{ version: 1, servers }`, or `{ mcpServers: { name: config } }`.
+The batch (1–200 records) is fully validated before any write; duplicate names reject the
+whole batch. Imported records get fresh ids and are always disabled. Export omits environment
+variables and headers unless `includeSecrets: true`; command arguments and URLs are retained
+and may themselves contain credentials. Restore missing credentials before enabling an import.
+Tool switches use raw names from the current advertised catalog; unknown names fail with
+`not-found` before persistence. Disabled tools remain in the displayed catalog.
+
 
 `takeover` migrates one live `external` row into a managed record (or replaces the managed record
 with the same `name`, keeping its id, so a broken row can be repaired in place): it validates the
@@ -125,13 +162,14 @@ same repair when it cannot disable its source row.
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
 ```json
-{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "unsupported" | "internal",
+{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "unsupported" | "storage-readonly" | "internal",
                           "message": "…", "field": "name?" } }
 ```
 
 `ServerInput` is `Server` without `id`/`createdAt` (all other fields accepted; unknown fields dropped).
 `ServerView` is `Server` plus the flattened runtime status fields above
-(`status`, `error`, `tools`, `toolCount`, `serverInfo`, `instructions`, `connectedAt`).
+(`status`, `error`, `tools`, `toolCount`, `serverInfo`, `instructions`, `connectedAt`,
+`protocolVersion`, `retryAttempt`, `nextRetryAt`, `logs`).
 
 ### Validation rules (Host, authoritative)
 
@@ -158,6 +196,22 @@ For each `ready` server, register `ctx.tools.register({...})` per MCP tool:
 - Registering/disconnecting swaps the whole tool set atomically; a dispose from plugin unload
   removes every tool and kills every child process.
 
+## Connection lifecycle
+
+HTTP headers use the protocol version negotiated in the initialize JSON result, accepting
+2025-06-18, 2025-03-26 and 2024-11-05; unsupported versions fail before `initialized`.
+RPC distinguishes server requests, notifications and responses. Pings receive responses;
+unknown server requests receive method-not-found. Timeout/cancel abort the individual HTTP
+request and send best-effort cancellation (except initialize). All close paths release active
+HTTP work and terminate sessions, including after transport failure.
+
+When advertised, HTTP uses an optional GET SSE stream for notifications (405 is tolerated).
+`notifications/tools/list_changed` refreshes the full catalog without restarting the server;
+failed registration restores the previous tool set. Retries use bounded exponential backoff
+and stop at `retryCount`. Manual reconnect, disable, or config-triggered reconnect
+resets the retry budget. Disable/remove/unload cancel outstanding retry timers. Activity retains
+bounded recent connection, refresh and tool-call outcomes, excluding tool arguments and results.
+
 ## Client page
 
 - Register into the `settings.section` slot exactly like the shipped settings pages:
@@ -183,8 +237,8 @@ ctx.slots.inject("settings.section", () => ctx.slots.register({
 - The page ends with a preference row: a `role="switch"` control labelled
   "Show in the sidebar" whose value is `ui.railEntry`; it writes through `/api/mcp-manager.ui`.
 - Page contents: `<h2>` title + `<p>` intro (18px/600 heading, 13px secondary intro), then the
-  body. There is no header action row: an empty list shows the empty-state card with its single
-  add button, and a non-empty list ends with a full-width dashed add row (host Models-page
+  body. A toolbar provides search, status filtering and refresh. An empty deployment shows an
+  empty-state card with its add button; a non-empty managed list ends with a dashed add row (host Models-page
   pattern: height 44, `--dsw-radius-lg`, `1px dashed --dsw-alias-border-l3`). Each server is a
   card (`--dsw-alias-bg-module-platform`) with status dot, name, transport summary, meta chips,
   expandable tool details and the enable/reconnect/edit/delete actions.
@@ -194,6 +248,13 @@ ctx.slots.inject("settings.section", () => ctx.slots.register({
 - Delete asks for confirmation inside the row/modal before calling the Host.
 - Only the `--dsw-*` theme tokens listed below; class names prefixed `dshmcp-`.
   Render the `<style>` element inside the root component (unmounting removes it).
+- Both surfaces reflect the same committed state. Late background responses must not undo
+  completed edits. Leaving a page cancels its background reads; network operations have finite
+  deadlines. Dismissing a saving dialog does not cancel an already submitted configuration change
+  or allow its completion to close a subsequently opened editor.
+- Search and status filters apply to managed and external rows. Copy opens an editable,
+  disabled draft with a unique name. Import/export and confirmed recovery are inline sections
+  before the final sidebar preference row.
 - All visible text goes through `t(...)`; dictionaries cover English and Simplified Chinese.
 - After every mutation, render the `servers` array from the response. Poll `.list` every 5 s
   while mounted (cleared on unmount) so `connecting`/`error` states settle.
@@ -218,8 +279,11 @@ Geometry and depth: `--dsw-radius-sm`, `--dsw-radius-md`, `--dsw-radius-lg`,
 
 ## Constraints
 
-- No dependencies, no imports of `@deepseek-ai/*` packages, no network at build time.
+- No runtime dependencies, no imports of `@deepseek-ai/*` packages, no network at build time.
 - Host half may import `node:*` builtins only.
 - Client half may not touch `document` outside its component, must not require anything but
   `react`, and must keep factories side-effect free.
 - Never write outside `mcp-manager/`. Do not install, enable, or remove any bundle.
+
+The optional browser test suite uses isolated development-only Python/Playwright and React
+fixtures. These dependencies are not part of the plugin package or the Node-only test suite.

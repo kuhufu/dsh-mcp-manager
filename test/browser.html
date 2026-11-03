@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MCP manager QA</title>
+<style>
+:root{--dsw-alias-bg-base:#fff;--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#eee;--dsw-alias-bg-mask-1:#0006;--dsw-alias-bg-module-platform:#f7f7f8;--dsw-alias-border-l1:#ddd;--dsw-alias-border-l2:#ddd;--dsw-alias-border-l3:#ccc;--dsw-alias-brand-primary:#4164d8;--dsw-alias-button-primary-fill:#4164d8;--dsw-alias-button-primary-hover:#3455c0;--dsw-alias-interactive-bg-hover:#eee;--dsw-alias-label-primary:#171717;--dsw-alias-label-primary-foreground:#fff;--dsw-alias-label-secondary:#666;--dsw-alias-state-business-primary:#4164d8;--dsw-alias-state-error-primary:#b42318;--dsw-alias-state-idle-primary:#aaa;--dsw-alias-state-success-primary:#248640;--dsw-alias-state-warn-primary:#a16500;--dsw-focus-ring-color:#4164d8;--dsw-radius-sm:4px;--dsw-radius-md:8px;--dsw-radius-lg:12px;--dsw-radius-panel:16px;--dsw-elevation-prominent:0 8px 40px #0003;--dsw-mask-blur:4px}
+body{margin:0;padding:16px;font-family:system-ui,sans-serif}#root{max-width:760px;margin:auto}
+</style><div id="root"></div><script src="react.js"></script><script src="react-dom.js"></script>
+<script>
+let mod;window.__ModuleLoader__={load(spec){mod=spec.factory(()=>React)}};
+</script><script src="client.js"></script><script>
+const components=new Map();let dictionary;
+const t=(key,params)=>{let value=dictionary?.[key]??key;return value.replace(/\{(\w+)\}/g,(m,k)=>params?.[k]??m)};
+const ctx={effect(fn){return fn()},locale:{register(ns,dict){dictionary=dict.zh;return()=>{}},bind(){return t}},slots:{inject(name,fn){return fn()},register(meta,component){components.set(meta.name,component);return()=>components.delete(meta.name)}}};
+mod.apply(ctx);
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(components.get('settings.section'),{t}));
+</script></html>

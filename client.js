@@ -29,6 +29,10 @@ window.__ModuleLoader__.load({
       takeover: 'api/mcp-manager.takeover',
       ui: 'api/mcp-manager.ui',
       toggleExternal: 'api/mcp-manager.toggle-external',
+      import: 'api/mcp-manager.import',
+      export: 'api/mcp-manager.export',
+      recover: 'api/mcp-manager.recover',
+      tool: 'api/mcp-manager.tool',
     };
     /** Tool names are registered as `mcp__<server>__<tool>`; the UI only needs the prefix. */
     const TOOL_PREFIX = 'mcp__';
@@ -37,14 +41,58 @@ window.__ModuleLoader__.load({
     const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
     const HEADER_KEY_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
+    /** Mirror Host validation without importing Node code; parity is regression-tested. */
+    const CONNECTION_OPTIONS = {
+      requestTimeoutMs: { min: 1000, max: 600000, default: 60000 },
+      initializeTimeoutMs: { min: 1000, max: 300000, default: 30000 },
+      retryCount: { min: 0, max: 10, default: 0 },
+    };
+
     // ── dictionaries ──────────────────────────────────────────────────────
     /** English copy. */
     const en = {
+      storageSkipped: "Skipped {count} invalid or duplicate record(s). Valid servers remain available; the original file will be archived before the next save.",
+      fileTooLarge: "Choose a JSON file smaller than 2 MB.",
+      search: "Search servers",
+      filter: "Filter by status",
+      all: "All statuses",
+      noMatches: "No servers match these filters.",
+      copy: "Duplicate {name}",
+      advanced: "Connection options",
+      requestTimeoutMs: "Tool timeout (ms)",
+      initializeTimeoutMs: "Handshake timeout (ms)",
+      retryCount: "Automatic retries (0–10)",
+      retryHint: "0 disables automatic retries. Retries use exponential backoff, at most 30 seconds apart. Manual reconnect resets the limit.",
+      errNumber: "Enter an integer from {min} to {max}.",
+      logs: "Recent activity",
+      noLogs: "No connection activity yet.",
+      nextRetry: "Next retry",
+      protocol: "Protocol version",
+      enableTool: "Enable tool {name}",
+      disableTool: "Disable tool {name}",
+      configTransfer: "Import / export configuration",
+      jsonConfig: "JSON configuration",
+      importConfig: "Import as disabled servers",
+      exportConfig: "Export configuration",
+      includeSecrets: "Include environment variables and request headers",
+      secretsHint: "Exports with this option contain credentials in plain text. Store them carefully.",
+      importHint: "Paste a servers array, an exported document, or an mcpServers object. Existing names are rejected. Imported servers remain disabled until you enable them.",
+      importPreview: "{count} server(s) in this document",
+      jsonInvalid: "Enter valid JSON.",
+      importDone: "Imported {count} disabled server(s).",
+      download: "Download JSON",
+      chooseFile: "Load JSON file",
+      storageProblem: "Configuration could not be loaded. Changes are locked to preserve the original file.",
+      restoreBackup: "Restore previous backup",
+      resetStorage: "Start with an empty configuration",
+      recoverConfirm: "Continue? The current file will be archived before recovery.",
+      refreshStatus: "Refresh status",
+      exportHint: "Environment variables and headers are omitted by default. Refill them before enabling imported servers.",
+
       nav: 'MCP servers',
       title: 'MCP servers',
       intro:
         'Connect Model Context Protocol servers so their tools become available to the agent. Changes take effect immediately.',
-      count: '{ready} of {total} connected',
       add: 'Add server',
       refresh: 'Refresh status',
       refreshing: 'Refreshing…',
@@ -73,8 +121,6 @@ window.__ModuleLoader__.load({
       takeoverConfirmHint:
         'Its configuration is copied into this page\'s storage — environment values and headers included, as plain text.',
       takeoverConfirmAction: 'Migrate',
-      railLabel: 'Show in the sidebar',
-      railHint: 'Adds this page to the left rail with its own icon. The Settings entry stays either way.',
       showTools: 'Show tools',
       hideTools: 'Hide tools',
       toolsEmpty: 'This server declares no tools.',
@@ -136,15 +182,50 @@ window.__ModuleLoader__.load({
       errLoad: 'Could not load the server list.',
       railLabel: 'Show in the sidebar',
       railHint: 'Adds this page as a panel in the left rail; turning it off keeps Settings → MCP servers.',
-      railOn: 'Added to the sidebar.',
-      railOff: 'Removed from the sidebar.',
     };
     /** Simplified Chinese copy. */
     const zh = {
+      storageSkipped: "已跳过 {count} 条无效或重复记录，其余服务器仍可使用；下次保存前会先归档原文件。",
+      fileTooLarge: "请选择小于 2 MB 的 JSON 文件。",
+      search: "搜索服务器",
+      filter: "按状态筛选",
+      all: "全部状态",
+      noMatches: "没有符合筛选条件的服务器。",
+      copy: "复制 {name}",
+      advanced: "连接选项",
+      requestTimeoutMs: "工具调用超时（毫秒）",
+      initializeTimeoutMs: "握手超时（毫秒）",
+      retryCount: "自动重试次数（0–10）",
+      retryHint: "0 表示不自动重连。重试间隔逐次增加，最长 30 秒；手动重连会重置次数。",
+      errNumber: "请输入 {min} 到 {max} 之间的整数。",
+      logs: "近期活动",
+      noLogs: "暂无连接活动。",
+      nextRetry: "下次重试",
+      protocol: "协议版本",
+      enableTool: "启用工具 {name}",
+      disableTool: "停用工具 {name}",
+      configTransfer: "导入 / 导出配置",
+      jsonConfig: "JSON 配置",
+      importConfig: "导入为停用的服务器",
+      exportConfig: "导出配置",
+      includeSecrets: "包含环境变量和请求头",
+      secretsHint: "勾选后，导出的文件会包含明文凭据，请妥善保存。",
+      importHint: "粘贴服务器数组、导出的配置或 mcpServers 对象。名称重复时整批拒绝，导入后需手动启用。",
+      importPreview: "文档包含 {count} 个服务器",
+      jsonInvalid: "请输入有效的 JSON。",
+      importDone: "已导入 {count} 个服务器，当前均已停用。",
+      download: "下载 JSON",
+      chooseFile: "读取 JSON 文件",
+      storageProblem: "配置无法读取。为保留原文件，当前已锁定修改。",
+      restoreBackup: "恢复上一次备份",
+      resetStorage: "使用空配置重新开始",
+      recoverConfirm: "确认继续？恢复前会先归档当前文件。",
+      refreshStatus: "刷新状态",
+      exportHint: "默认不导出环境变量和请求头；导入后请补全这些字段再启用。",
+
       nav: 'MCP 服务器',
       title: 'MCP 服务器',
       intro: '连接 Model Context Protocol 服务器，把它们的工具提供给智能体使用。改动立即生效。',
-      count: '{total} 个服务器，{ready} 个已连接',
       add: '添加服务器',
       refresh: '刷新状态',
       refreshing: '刷新中…',
@@ -172,8 +253,6 @@ window.__ModuleLoader__.load({
       takeoverConfirm: '把「{name}」迁到本页，并停用它的 dsh-mcp-client 条目？',
       takeoverConfirmHint: '配置会复制到本页存储——包括环境变量和请求头，明文保存。',
       takeoverConfirmAction: '迁移',
-      railLabel: '在左侧栏显示入口',
-      railHint: '在左侧栏加一个带图标的入口；设置里的页面不受影响。',
       showTools: '查看工具',
       hideTools: '收起工具',
       toolsEmpty: '该服务器没有声明任何工具。',
@@ -235,8 +314,6 @@ window.__ModuleLoader__.load({
       errLoad: '无法读取服务器列表。',
       railLabel: '在左侧栏显示入口',
       railHint: '把本页作为面板加入左侧栏；关闭后仍保留“设置 → MCP 服务器”。',
-      railOn: '已在左侧栏添加面板入口。',
-      railOff: '已从左侧栏移除面板入口。',
     };
 
     // ── wire helpers ──────────────────────────────────────────────────────
@@ -262,7 +339,7 @@ window.__ModuleLoader__.load({
      * @returns the parsed success payload.
      * @throws {ApiError} on transport failure, `ok: false`, or an unparsable body.
      */
-    async function post(route, body) {
+    async function post(route, body, signal) {
       let response;
       try {
         response = await fetch(route, {
@@ -271,6 +348,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify(body),
           cache: 'no-store',
           credentials: 'same-origin',
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
         });
       } catch (error) {
         throw new ApiError('network', error && error.message ? String(error.message) : 'network error');
@@ -413,7 +491,7 @@ window.__ModuleLoader__.load({
         const at = line.indexOf('=');
         if (at < 0) return { error: t('errLineFormat', { line: index + 1 }) };
         const key = line.slice(0, at).trim();
-        const value = line.slice(at + 1).trim();
+        const value = line.slice(at + 1);
         if (key === '') return { error: t('errLineFormat', { line: index + 1 }) };
         if (!keyPattern.test(key)) return { error: t(keyError, { line: index + 1 }) };
         record[key] = value;
@@ -442,6 +520,8 @@ window.__ModuleLoader__.load({
         cwd: server && server.cwd ? server.cwd : '',
         url: server && server.url ? server.url : '',
         headers: server ? pairsToText(server.headers) : '',
+        ...Object.fromEntries(Object.entries(CONNECTION_OPTIONS).map(([key, rule]) => [key, String(server?.[key] ?? rule.default)])),
+        disabledTools: server?.disabledTools ?? [],
       };
     }
 
@@ -477,6 +557,12 @@ window.__ModuleLoader__.load({
         const cwd = draft.cwd.trim();
         if (cwd !== '') input.cwd = cwd;
       }
+      for (const [field, { min, max }] of Object.entries(CONNECTION_OPTIONS)) {
+        const value = Number(draft[field]);
+        if (draft[field] === '' || !Number.isInteger(value) || value < min || value > max) errors[field] = t('errNumber', { min, max });
+        else input[field] = value;
+      }
+      input.disabledTools = draft.disabledTools;
       const keys = Object.keys(errors);
       return keys.length === 0 ? { input, errors } : { input: null, errors };
     }
@@ -485,6 +571,7 @@ window.__ModuleLoader__.load({
     /** Stroke icons on a 24px grid; `currentColor` keeps them theme-driven. */
     const ICONS = {
       plus: ['M12 5v14M5 12h14'],
+      copy: ['M8 8h13v13H8Z', 'M16 8V3H3v13h5'],
       refresh: [
         'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8',
         'M21 3v5h-5',
@@ -757,7 +844,7 @@ window.__ModuleLoader__.load({
             const summary = http
               ? item.url || ''
               : [item.command, ...(Array.isArray(item.args) ? item.args : [])].filter(Boolean).join(' ');
-            const busy = props.busyId === item.entryId;
+            const busy = props.busyIds.has(item.entryId);
             const confirming = confirmId === item.entryId;
             return h(
               'li',
@@ -947,6 +1034,8 @@ window.__ModuleLoader__.load({
       if (server.transport === 'http' && server.url) {
         rows.push([t('labelUrl'), server.url]);
       }
+      if (server.protocolVersion) rows.push([t('protocol'), server.protocolVersion]);
+      if (server.nextRetryAt) rows.push([t('nextRetry'), formatWhen(server.nextRetryAt)]);
       if (server.connectedAt) {
         rows.push([t('labelConnected'), formatWhen(server.connectedAt)]);
       }
@@ -963,13 +1052,17 @@ window.__ModuleLoader__.load({
                 h(
                   'li',
                   { key: (tool && tool.name ? tool.name : 'tool') + ':' + index, className: 'dshmcp-tool' },
-                  h('code', { className: 'dshmcp-tool-name' }, tool && tool.name ? tool.name : ''),
+                  h('code', { className: 'dshmcp-tool-name' }, tool.publicName || tool.name),
+                  h(SwitchButton, { checked: tool.enabled !== false, busy: props.busy, label: t(tool.enabled !== false ? 'disableTool' : 'enableTool', { name: tool.name }), onChange: () => props.onToolToggle(tool) }),
                   tool && tool.description
                     ? h('span', { className: 'dshmcp-tool-desc' }, tool.description)
                     : null,
                 ),
               ),
             ),
+        h('details', { className: 'dshmcp-log' }, h('summary', null, t('logs')),
+          (server.logs || []).length === 0 ? h('p', null, t('noLogs')) : h('ol', null,
+            server.logs.map((entry, index) => h('li', { key: index, 'data-level': entry.level }, `${formatWhen(entry.time)} — ${entry.message}`)))),
         server.instructions
           ? h(
               'div',
@@ -1000,7 +1093,7 @@ window.__ModuleLoader__.load({
       const t = props.t;
       const server = props.server;
       const phase = phaseOf(server);
-      const busyHere = props.busyId === server.id;
+      const busyHere = props.busyIds.has(server.id);
       const summary = transportSummary(server);
       const toolCount = typeof server.toolCount === 'number' ? server.toolCount : (server.tools || []).length;
       const detailsId = 'dshmcp-details-' + server.id;
@@ -1090,6 +1183,7 @@ window.__ModuleLoader__.load({
               },
               h(Icon, { name: 'pencil' }),
             ),
+            h('button', { type: 'button', className: 'dshmcp-icon-btn', title: t('copy', { name: server.name }), 'aria-label': t('copy', { name: server.name }), disabled: busyHere, onClick: props.onCopy }, h(Icon, { name: 'copy' })),
             h(
               'button',
               {
@@ -1121,7 +1215,7 @@ window.__ModuleLoader__.load({
                 : null,
             )
           : null,
-        props.expanded ? h(ServerDetails, { t, server, id: detailsId }) : null,
+        props.expanded ? h(ServerDetails, { t, server, id: detailsId, onToolToggle: props.onToolToggle, busy: busyHere }) : null,
         props.confirming
           ? h(ConfirmBar, {
               t,
@@ -1150,6 +1244,9 @@ window.__ModuleLoader__.load({
         env: React.useRef(null),
         headers: React.useRef(null),
         cwd: React.useRef(null),
+        requestTimeoutMs: React.useRef(null),
+        initializeTimeoutMs: React.useRef(null),
+        retryCount: React.useRef(null),
       };
       const aliveRef = React.useRef(true);
       const [draft, setDraft] = React.useState(() => draftOf(props.server));
@@ -1195,7 +1292,7 @@ window.__ModuleLoader__.load({
         if (!result.input) {
           setErrors(result.errors);
           setFailure(null);
-          const order = ['name', 'command', 'url', 'args', 'env', 'cwd', 'headers'];
+          const order = ['name', 'command', 'url', 'args', 'env', 'cwd', 'headers', 'requestTimeoutMs', 'initializeTimeoutMs', 'retryCount'];
           for (const key of order) {
             if (result.errors[key] && fieldRefs[key].current) {
               fieldRefs[key].current.focus();
@@ -1210,7 +1307,7 @@ window.__ModuleLoader__.load({
         try {
           await props.onSave(result.input);
         } catch (error) {
-          if (!aliveRef.current) return;
+          if (!aliveRef.current) { props.onDetachedError(error); return; }
           const message = explain(error, t);
           const field = error instanceof ApiError ? error.field : undefined;
           if (field && fieldRefs[field] !== undefined) {
@@ -1386,6 +1483,14 @@ window.__ModuleLoader__.load({
         );
         body.push(field('headers', t('fieldHeaders'), t('fieldHeadersHint'), textarea('headers'), true));
       }
+
+      body.push(h('fieldset', { key: 'advanced', className: 'dshmcp-options' },
+        h('legend', null, t('advanced')),
+        Object.entries(CONNECTION_OPTIONS).map(([key, rule]) => field(key, t(key), null, (fieldId, describedBy) =>
+          h('input', { id: fieldId, ref: fieldRefs[key], className: 'dshmcp-input', type: 'number', min: rule.min,
+            max: rule.max, step: 1, value: draft[key], onChange: edit(key),
+            'aria-invalid': !!errors[key], 'aria-describedby': describedBy }))),
+        h('p', { className: 'dshmcp-hint' }, t('retryHint'))));
 
       const titleId = id('title');
       return h(
@@ -1580,6 +1685,176 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // Both mounted surfaces share mutation ordering and committed snapshots.
+    const dataListeners = new Set();
+    let dataGeneration = 0;
+    let readSequence = 0;
+    let appliedRead = 0;
+    let pendingWrites = 0;
+    let mutationTail = Promise.resolve();
+
+    function publishData(payload) {
+      for (const listener of dataListeners) listener(payload);
+    }
+
+    function mutateData(route, body) {
+      dataGeneration += 1;
+      pendingWrites += 1;
+      const result = mutationTail.then(async () => {
+        const payload = await post(route, body);
+        publishData(payload);
+        return payload;
+      });
+      mutationTail = result.catch(() => {}).finally(() => {
+        pendingWrites -= 1;
+        dataGeneration += 1;
+      });
+      return result;
+    }
+
+    /** Named application actions; components do not depend on wire route names. */
+    const managerActions = {
+      save: (body) => mutateData(ROUTES.save, body),
+      remove: (id) => mutateData(ROUTES.remove, { id }),
+      toggle: (id, enabled) => mutateData(ROUTES.toggle, { id, enabled }),
+      reconnect: (id) => mutateData(ROUTES.reconnect, { id }),
+      takeover: (entryId) => mutateData(ROUTES.takeover, { entryId }),
+      toggleExternal: (entryId, enabled) => mutateData(ROUTES.toggleExternal, { entryId, enabled }),
+      setRailEntry: (railEntry) => mutateData(ROUTES.ui, { railEntry }),
+      setToolEnabled: (id, name, enabled) => mutateData(ROUTES.tool, { id, name, enabled }),
+      importServers: (document) => mutateData(ROUTES.import, { document }),
+      exportServers: (includeSecrets) => post(ROUTES.export, { includeSecrets }),
+      recover: (mode) => mutateData(ROUTES.recover, { mode }),
+    };
+
+    /** Network lifetime and shared snapshots are kept outside page actions. */
+    function useManagerData(t) {
+      const [servers, setServers] = React.useState(null);
+      const [external, setExternal] = React.useState([]);
+      const [storage, setStorage] = React.useState({ readOnly: false, hasBackup: false });
+      const [loadError, setLoadError] = React.useState(null);
+      const [railEntry, setRailEntry] = React.useState(true);
+      const alive = React.useRef(true);
+      const activeRead = React.useRef(null);
+      const receive = React.useCallback((payload) => {
+        if (!alive.current) return;
+        if (Array.isArray(payload.servers)) setServers(payload.servers);
+        if (Array.isArray(payload.external)) setExternal(payload.external);
+        if (payload.storage) setStorage(payload.storage);
+        if (payload.ui) {
+          const value = readRailEntry(payload);
+          setRailEntry(value);
+          railSurface?.observe(value);
+        }
+        setLoadError(null);
+      }, []);
+      const requestList = React.useCallback(async (manual) => {
+        if (!alive.current || pendingWrites) return;
+        if (activeRead.current && !manual) return;
+        activeRead.current?.abort();
+        const controller = new AbortController();
+        activeRead.current = controller;
+        const generation = dataGeneration;
+        const sequence = ++readSequence;
+        try {
+          const payload = await post(ROUTES.list, {}, controller.signal);
+          if (controller.signal.aborted || !alive.current || generation !== dataGeneration || sequence < appliedRead) return;
+          appliedRead = sequence;
+          publishData(payload);
+        } catch (error) {
+          if (controller.signal.aborted || !alive.current || generation !== dataGeneration || sequence < appliedRead) return;
+          setLoadError({ text: t('errLoad'), detail: explain(error, t) });
+        } finally {
+          if (activeRead.current === controller) activeRead.current = null;
+        }
+      }, [t]);
+      React.useEffect(() => {
+        alive.current = true;
+        dataListeners.add(receive);
+        requestList(false);
+        const timer = setInterval(() => requestList(false), POLL_MS);
+        return () => {
+          alive.current = false;
+          activeRead.current?.abort();
+          activeRead.current = null;
+          dataListeners.delete(receive);
+          clearInterval(timer);
+        };
+      }, [receive, requestList]);
+      return { servers, external, storage, loadError, railEntry, alive, requestList, actions: managerActions };
+    }
+
+    function StorageRecovery({ t, storage, actions }) {
+      const [mode, setMode] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      if (!storage.readOnly) return storage.skippedRecords
+        ? h('p', { className: 'dshmcp-hint', role: 'status' }, t('storageSkipped', { count: storage.skippedRecords })) : null;
+      const recover = async () => {
+        setBusy(true);
+        setError(null);
+        try { await actions.recover(mode); setMode(null); }
+        catch (failure) { setError(explain(failure, t)); }
+        finally { setBusy(false); }
+      };
+      return h('div', { className: 'dshmcp-recovery', role: 'alert' },
+        h('p', null, t('storageProblem')),
+        h('p', { className: 'dshmcp-hint' }, storage.error),
+        error ? h('p', null, error) : null,
+        mode ? h('div', null, h('p', null, t('recoverConfirm')),
+          h('button', { type: 'button', className: 'dshmcp-btn', disabled: busy, onClick: () => setMode(null) }, t('cancel')),
+          h('button', { type: 'button', className: 'dshmcp-btn', disabled: busy, onClick: recover }, t(mode === 'backup' ? 'restoreBackup' : 'resetStorage')))
+          : h('div', { className: 'dshmcp-toolbar' },
+            h('button', { type: 'button', className: 'dshmcp-btn', disabled: !storage.hasBackup, onClick: () => setMode('backup') }, t('restoreBackup')),
+            h('button', { type: 'button', className: 'dshmcp-btn', onClick: () => setMode('reset') }, t('resetStorage'))));
+    }
+
+    function ConfigTransfer({ t, readOnly, actions }) {
+      const uid = React.useId();
+      const [text, setText] = React.useState('');
+      const [includeSecrets, setIncludeSecrets] = React.useState(false);
+      const [busy, setBusy] = React.useState(false);
+      const [message, setMessage] = React.useState(null);
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { /* inline validation below */ }
+      const count = Array.isArray(parsed) ? parsed.length : Array.isArray(parsed?.servers) ? parsed.servers.length
+        : parsed?.mcpServers ? Object.keys(parsed.mcpServers).length : 0;
+      const run = async (task) => {
+        setBusy(true);
+        setMessage(null);
+        try { await task(); }
+        catch (error) { setMessage({ error: true, text: explain(error, t) }); }
+        finally { setBusy(false); }
+      };
+      return h('details', { className: 'dshmcp-transfer' },
+        h('summary', null, t('configTransfer')),
+        h('p', { className: 'dshmcp-hint' }, t('importHint')),
+        h('label', { htmlFor: uid + '-file', className: 'dshmcp-label' }, t('chooseFile')),
+        h('input', { id: uid + '-file', type: 'file', accept: '.json,application/json', disabled: busy,
+          onChange: (event) => { const file = event.target.files?.[0]; if (file) void run(async () => {
+            if (file.size > 2 * 1024 * 1024) throw new ApiError('invalid', t('fileTooLarge'));
+            setText(await file.text());
+          }); } }),
+        h('label', { htmlFor: uid + '-json', className: 'dshmcp-label' }, t('jsonConfig')),
+        h('textarea', { id: uid + '-json', className: 'dshmcp-textarea', rows: 8, value: text, spellCheck: false,
+          autoComplete: 'off', disabled: busy, 'aria-describedby': uid + '-preview', onChange: (event) => setText(event.target.value) }),
+        h('p', { id: uid + '-preview', className: 'dshmcp-hint' }, text && !parsed ? t('jsonInvalid') : t('importPreview', { count })),
+        h('label', { className: 'dshmcp-checkbox' }, h('input', { type: 'checkbox', checked: includeSecrets, disabled: busy,
+          onChange: (event) => setIncludeSecrets(event.target.checked) }), t('includeSecrets')),
+        h('p', { className: 'dshmcp-hint' }, t(includeSecrets ? 'secretsHint' : 'exportHint')),
+        message ? h('p', { role: message.error ? 'alert' : 'status' }, message.text) : null,
+        h('div', { className: 'dshmcp-toolbar' },
+          h('button', { type: 'button', className: 'dshmcp-btn', disabled: busy || readOnly || !count,
+            onClick: () => run(async () => { const result = await actions.importServers(parsed); setMessage({ text: t('importDone', { count: result.imported }) }); }) }, t('importConfig')),
+          h('button', { type: 'button', className: 'dshmcp-btn', disabled: busy || readOnly,
+            onClick: () => run(async () => { const result = await actions.exportServers(includeSecrets); setText(JSON.stringify(result.document, null, 2)); }) }, t('exportConfig')),
+          h('button', { type: 'button', className: 'dshmcp-btn', disabled: busy || !parsed, onClick: () => {
+            const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+            const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'mcp-servers.json'; anchor.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } }, t('download'))));
+    }
+
     // ── the section ───────────────────────────────────────────────────────
     /**
      * Render the MCP servers settings page.
@@ -1591,67 +1866,19 @@ window.__ModuleLoader__.load({
         () => (typeof props.t === 'function' ? props.t : directTranslator()),
         [props.t],
       );
-      const [servers, setServers] = React.useState(null);
-      const [external, setExternal] = React.useState([]);
-      const [loadError, setLoadError] = React.useState(null);
+      const { servers, external, storage, loadError, railEntry, alive, requestList, actions } = useManagerData(t);
       const [notice, setNotice] = React.useState(null);
-      const [busyId, setBusyId] = React.useState(null);
+      const [busyIds, setBusyIds] = React.useState(() => new Set());
+      const activeActions = React.useRef(new Set());
       const [confirmId, setConfirmId] = React.useState(null);
       const [expanded, setExpanded] = React.useState({});
       const [editor, setEditor] = React.useState(null);
-      const [railEntry, setRailEntry] = React.useState(true);
       const [railBusy, setRailBusy] = React.useState(false);
-
-      const alive = React.useRef(true);
-      const epoch = React.useRef(0);
-      const listSeq = React.useRef(0);
-      const listBusy = React.useRef(false);
+      const [query, setQuery] = React.useState('');
+      const [filter, setFilter] = React.useState('all');
       const deleteRefs = React.useRef(new Map());
       const previousConfirm = React.useRef(null);
       const editorKey = React.useRef(0);
-
-      // Every response carries `ui`; the page and the rail surface both follow it.
-      const applyUi = React.useCallback((payload) => {
-        const next = readRailEntry(payload);
-        setRailEntry(next);
-        if (railSurface !== null) railSurface.observe(next);
-      }, []);
-
-      const requestList = React.useCallback(
-        async (manual) => {
-          if (!alive.current || listBusy.current) return;
-          listBusy.current = true;
-          const seq = ++listSeq.current;
-          const startedEpoch = epoch.current;
-          try {
-            const payload = await post(ROUTES.list, {});
-            if (!alive.current || seq !== listSeq.current || startedEpoch !== epoch.current) return;
-            setServers(Array.isArray(payload.servers) ? payload.servers : []);
-            if (Array.isArray(payload.external)) setExternal(payload.external);
-            applyUi(payload);
-            setLoadError(null);
-          } catch (error) {
-            if (!alive.current || seq !== listSeq.current) return;
-            setLoadError({ text: t('errLoad'), detail: explain(error, t) });
-          } finally {
-            listBusy.current = false;
-          }
-        },
-        [t, applyUi],
-      );
-
-      React.useEffect(() => {
-        alive.current = true;
-        requestList(false);
-        const timer = setInterval(() => {
-          requestList(false);
-        }, POLL_MS);
-        return () => {
-          alive.current = false;
-          listBusy.current = false;
-          clearInterval(timer);
-        };
-      }, [requestList]);
 
       // The confirmation's safe choice takes focus; cancelling hands it back to Delete.
       React.useEffect(() => {
@@ -1663,20 +1890,10 @@ window.__ModuleLoader__.load({
         previousConfirm.current = confirmId;
       }, [confirmId]);
 
-      const mutate = React.useCallback(async (route, body) => {
-        const payload = await post(route, body);
-        epoch.current += 1;
-        if (alive.current) {
-          setServers(Array.isArray(payload.servers) ? payload.servers : []);
-          if (Array.isArray(payload.external)) setExternal(payload.external);
-          applyUi(payload);
-          setLoadError(null);
-        }
-        return payload;
-      }, [applyUi]);
-
       const run = async (id, task) => {
-        setBusyId(id);
+        if (activeActions.current.has(id)) return;
+        activeActions.current.add(id);
+        setBusyIds(new Set(activeActions.current));
         try {
           await task();
         } catch (error) {
@@ -1685,28 +1902,29 @@ window.__ModuleLoader__.load({
           // The record the row pointed at is gone; resync so the list matches the Host.
           if (error instanceof ApiError && error.code === 'not-found') requestList(true);
         } finally {
-          if (alive.current) setBusyId((current) => (current === id ? null : current));
+          activeActions.current.delete(id);
+          if (alive.current) setBusyIds(new Set(activeActions.current));
         }
       };
 
       const toggleServer = (server) =>
         run(server.id, async () => {
-          await mutate(ROUTES.toggle, { id: server.id, enabled: !server.enabled });
+          await actions.toggle(server.id, !server.enabled);
         });
 
       const reconnectServer = (server) =>
         run(server.id, async () => {
-          await mutate(ROUTES.reconnect, { id: server.id });
+          await actions.reconnect(server.id);
         });
 
       const takeoverServer = (item) =>
         run(item.entryId, async () => {
-          await mutate(ROUTES.takeover, { entryId: item.entryId });
+          await actions.takeover(item.entryId);
         });
 
       const toggleExternal = (item) =>
         run(item.entryId, async () => {
-          await mutate(ROUTES.toggleExternal, { entryId: item.entryId, enabled: !item.enabled });
+          await actions.toggleExternal(item.entryId, !item.enabled);
         });
 
       const setRailPreference = (next) => {
@@ -1714,14 +1932,7 @@ window.__ModuleLoader__.load({
         setRailBusy(true);
         void (async () => {
           try {
-            const payload = await post(ROUTES.ui, { railEntry: next });
-            if (!alive.current) return;
-            if (Array.isArray(payload.servers)) setServers(payload.servers);
-            if (Array.isArray(payload.external)) setExternal(payload.external);
-            const value = readRailEntry(payload);
-            setRailEntry(value);
-            if (railSurface !== null) railSurface.apply(value);
-            setLoadError(null);
+            await actions.setRailEntry(next);
           } catch (error) {
             if (!alive.current) return;
             setNotice({ tone: 'error', text: explain(error, t) });
@@ -1733,7 +1944,7 @@ window.__ModuleLoader__.load({
 
       const deleteServer = (server) =>
         run(server.id, async () => {
-          await mutate(ROUTES.remove, { id: server.id });
+          await actions.remove(server.id);
           if (!alive.current) return;
           setConfirmId(null);
           setExpanded((previous) => {
@@ -1755,9 +1966,9 @@ window.__ModuleLoader__.load({
         if (!editing) return;
         const body = { server: input };
         if (editing.mode === 'edit' && editing.server) body.id = editing.server.id;
-        await mutate(ROUTES.save, body);
+        await actions.save(body);
         if (!alive.current) return;
-        setEditor(null);
+        setEditor((current) => current?.key === editing.key ? null : current);
       };
 
       const registerDelete = (serverId) => (element) => {
@@ -1774,7 +1985,20 @@ window.__ModuleLoader__.load({
         });
 
       const loading = servers === null && loadError === null;
-      const rows = servers || [];
+      const allRows = servers || [];
+      const matches = (server) => (filter === 'all' || phaseOf(server) === filter)
+        && `${server.name ?? server.serverName ?? ''} ${transportSummary(server)}`.toLowerCase().includes(query.toLowerCase());
+      const rows = allRows.filter(matches);
+      const foreign = external.filter((item) => matches({ ...item, status: item.enabled ? 'ready' : 'stopped' }));
+      const copyServer = (server) => {
+        let suffix = 1;
+        let name;
+        do {
+          const tail = `_copy${suffix++}`;
+          name = server.name.slice(0, 32 - tail.length) + tail;
+        } while (allRows.some((row) => row.name === name));
+        openEditor('add', { ...server, id: undefined, name, enabled: false });
+      };
 
       return h(
         'div',
@@ -1789,16 +2013,24 @@ window.__ModuleLoader__.load({
         h(Banners, {
           t,
           loadError,
-          notice: notice !== null && notice.tone === 'error' ? notice : null,
+          notice,
           onRetry: () => requestList(true),
           onDismiss: () => setNotice(null),
         }),
+        h(StorageRecovery, { t, storage, actions }),
+        h('div', { className: 'dshmcp-toolbar' },
+          h('input', { type: 'search', className: 'dshmcp-input', 'aria-label': t('search'), placeholder: t('search'), value: query, onChange: (event) => setQuery(event.target.value) }),
+          h('select', { className: 'dshmcp-select', 'aria-label': t('filter'), value: filter, onChange: (event) => setFilter(event.target.value) },
+            h('option', { value: 'all' }, t('all')),
+            ['ready', 'connecting', 'error', 'disabled', 'stopped'].map((value) => h('option', { key: value, value }, t(PHASE_KEY[value])))),
+          h('button', { className: 'dshmcp-btn', type: 'button', onClick: () => requestList(true) }, t('refreshStatus'))),
+        h('div', { inert: storage.readOnly ? '' : undefined },
         loading
           ? h(SkeletonRows, { t })
-          : rows.length === 0 && loadError === null
+          : allRows.length === 0 && external.length === 0 && loadError === null
             ? h(EmptyState, { t, onAdd: () => openEditor('add', null) })
             : rows.length === 0
-              ? null
+              ? (foreign.length === 0 && loadError === null ? h('p', { role: 'status', className: 'dshmcp-hint' }, t('noMatches')) : null)
               : h(
                   React.Fragment,
                   null,
@@ -1810,13 +2042,15 @@ window.__ModuleLoader__.load({
                         key: server.id,
                         t,
                         server,
-                        busyId,
+                        busyIds,
                         expanded: Boolean(expanded[server.id]),
                         confirming: confirmId === server.id,
                         onToggleExpand: () => toggleExpanded(server.id),
                         onToggleEnabled: () => toggleServer(server),
                         onReconnect: () => reconnectServer(server),
                         onEdit: () => openEditor('edit', server),
+                        onCopy: () => copyServer(server),
+                        onToolToggle: (tool) => run(server.id, () => actions.setToolEnabled(server.id, tool.name, !tool.enabled)),
                         onRequestDelete: () => setConfirmId(server.id),
                         onCancelDelete: () => setConfirmId(null),
                         onConfirmDelete: () => deleteServer(server),
@@ -1835,24 +2069,30 @@ window.__ModuleLoader__.load({
                     t('add'),
                   ),
                 ),
-        external.length === 0
+        !loading && rows.length === 0 && external.length > 0
+          ? h('button', { type: 'button', className: 'dshmcp-add-row', onClick: () => openEditor('add', null) }, h(Icon, { name: 'plus' }), t('add'))
+          : null,
+        foreign.length === 0
           ? null
-          : h(ExternalList, { t, items: external, busyId, onTakeover: takeoverServer, onToggle: toggleExternal }),
-        h(RailPreferenceRow, {
+          : h(ExternalList, { t, items: foreign, busyIds, onTakeover: takeoverServer, onToggle: toggleExternal }),
+        ),
+        h(ConfigTransfer, { t, readOnly: storage.readOnly, actions }),
+        h('div', { inert: storage.readOnly ? '' : undefined }, h(RailPreferenceRow, {
           t,
           checked: railEntry,
           busy: railBusy,
           onChange: () => setRailPreference(!railEntry),
-        }),
+        })),
         editor
           ? h(ServerDialog, {
               key: 'editor-' + editor.key,
               t,
               mode: editor.mode,
               server: editor.server,
-              servers: rows,
+              servers: allRows,
               onClose: () => setEditor(null),
               onSave: saveServer,
+              onDetachedError: (error) => { if (alive.current) setNotice({ tone: 'error', text: explain(error, t) }); },
             })
           : null,
       );
@@ -1865,6 +2105,21 @@ window.__ModuleLoader__.load({
      * derives tints and veils so the page follows light and dark themes.
      */
     const STYLE_TEXT = `
+.dshmcp-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.dshmcp-toolbar>.dshmcp-input{flex:1;min-width:160px}
+.dshmcp-toolbar>.dshmcp-select{width:auto;max-width:100%}
+.dshmcp-transfer,.dshmcp-recovery{padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);min-width:0}
+.dshmcp-transfer>summary,.dshmcp-log>summary{cursor:pointer;padding:4px 0}
+.dshmcp-transfer>*{max-width:100%}
+.dshmcp-transfer>label,.dshmcp-transfer>input{margin:8px 0}
+.dshmcp-checkbox{display:flex;gap:8px;align-items:center}
+.dshmcp-options{display:flex;flex-direction:column;gap:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);padding:12px;min-width:0}
+.dshmcp-log ol{max-height:200px;overflow:auto;padding-left:20px;font-size:12px;overflow-wrap:anywhere}
+.dshmcp-log [data-level=error]{color:var(--dsw-alias-state-error-primary)}
+.dshmcp-recovery{border-color:var(--dsw-alias-state-warn-primary)}
+@media(max-width:480px){.dshmcp-toolbar>*{max-width:100%}.dshmcp-toolbar>.dshmcp-input{flex-basis:100%}.dshmcp-panel{padding:12px}}
+@media(prefers-reduced-motion:reduce){.dshmcp-section *{animation:none!important;transition:none!important}}
+
 .dshmcp-section{box-sizing:border-box;max-width:760px;width:100%;min-width:0;color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:20px}
 .dshmcp-section *{box-sizing:border-box}
 .dshmcp-panel{box-sizing:border-box;height:100%;overflow-y:auto;padding:24px}
@@ -1950,9 +2205,9 @@ window.__ModuleLoader__.load({
 .dshmcp-details{display:flex;flex-direction:column;gap:10px;margin:2px 0 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
 .dshmcp-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .dshmcp-tools{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.dshmcp-tool{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dshmcp-tool{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;min-width:0}
 .dshmcp-tool-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
-.dshmcp-tool-desc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.dshmcp-tool-desc{grid-column:1/-1;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dshmcp-detail-block{display:flex;flex-direction:column;gap:4px}
 .dshmcp-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px}
 .dshmcp-instructions{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;white-space:pre-wrap;max-height:132px;overflow-y:auto}

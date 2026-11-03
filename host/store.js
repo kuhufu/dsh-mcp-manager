@@ -6,8 +6,8 @@
  * records plus the page-level UI preference (`ui.railEntry`, default `true`).
  * Writes are atomic (a temp sibling plus `rename`) and serialized so concurrent
  * route handlers can never interleave two documents. Reads are tolerant: a
- * missing, unreadable, corrupt or unrecognized file yields an empty server list
- * (and a warning) instead of failing plugin startup; a missing or malformed
+ * missing file starts empty; unreadable, corrupt or unrecognized files expose
+ * a read-only recovery state instead of failing plugin startup; a missing or malformed
  * `ui` block simply falls back to the default preference.
  *
  * Validation functions are the authoritative Host-side rules from
@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -43,6 +43,13 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** HTTP header name rule (RFC 9110 token, deliberately permissive). */
 export const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
+/** Authoritative connection option ranges; the browser mirrors these without Host imports. */
+export const CONNECTION_OPTIONS = Object.freeze({
+  requestTimeoutMs: Object.freeze({ min: 1000, max: 600000, default: 60000 }),
+  initializeTimeoutMs: Object.freeze({ min: 1000, max: 300000, default: 30000 }),
+  retryCount: Object.freeze({ min: 0, max: 10, default: 0 }),
+});
+
 /**
  * Every machine-readable failure code the Host can put on the wire.
  *
@@ -57,12 +64,13 @@ export const ERROR_CODES = Object.freeze([
   'overridden',
   'unsupported',
   'internal',
+  'storage-readonly',
 ]);
 
 /** Failure carrying a stable wire code, a human message and an optional field. */
 export class ManagerError extends Error {
   /**
-   * @param {'invalid'|'duplicate-name'|'not-found'|'overridden'|'unsupported'|'internal'} code - stable wire code.
+   * @param {'invalid'|'duplicate-name'|'not-found'|'overridden'|'unsupported'|'storage-readonly'|'internal'} code - stable wire code.
    * @param {string} message - human-readable explanation shown by the Client.
    * @param {string} [field] - offending request field, when there is one.
    */
@@ -193,6 +201,18 @@ export function validateServerInput(input, context = {}) {
     normalized.headers = normalizeStringMap(input.headers, 'headers', HEADER_NAME_PATTERN);
   }
 
+  for (const [field, { min, max }] of Object.entries(CONNECTION_OPTIONS)) {
+    if (input[field] !== undefined) {
+      const value = input[field];
+      if (!Number.isInteger(value) || value < min || value > max) {
+        throw new ManagerError('invalid', `${field} must be an integer from ${min} to ${max}`, field);
+      }
+      normalized[field] = value;
+    }
+  }
+  if (input.disabledTools !== undefined) {
+    normalized.disabledTools = [...new Set(normalizeStringList(input.disabledTools, 'disabledTools'))];
+  }
   return normalized;
 }
 
@@ -319,83 +339,110 @@ export function createStore(options = {}) {
     if (logger !== undefined && typeof logger.warn === 'function') logger.warn(`mcp-manager: ${message}`);
   };
 
-  async function readDocument() {
-    const empty = { servers: [], ui: { railEntry: DEFAULT_UI.railEntry } };
-    let raw;
-    try {
-      raw = await readFile(file, 'utf8');
-    } catch (error) {
-      if (error?.code !== 'ENOENT') warn(`could not read ${file}: ${error?.message ?? String(error)}`);
-      return empty;
-    }
-    let document;
-    try {
-      document = JSON.parse(raw);
-    } catch {
-      warn(`ignoring unreadable JSON at ${file}`);
-      return empty;
-    }
-    if (!isRecord(document) || !Array.isArray(document.servers)) {
-      warn(`ignoring ${file}: expected an object with a servers array`);
-      return empty;
-    }
+  let storageError;
+  let skippedRecords = 0;
+  let hasBackup = false;
+  const backupFile = `${file}.bak`;
+
+  function parseDocument(raw, report = false) {
+    const document = JSON.parse(raw);
+    if (!isRecord(document) || !Array.isArray(document.servers)) throw new Error('expected a servers array');
     if (document.version !== undefined && document.version !== STORAGE_VERSION) {
-      warn(`ignoring ${file}: unsupported document version ${String(document.version)}`);
-      return empty;
+      throw new Error(`unsupported document version ${String(document.version)}`);
     }
     const accepted = [];
+    const ids = new Set();
+    let skipped = 0;
     for (const entry of document.servers) {
-      const server = coerceStoredServer(entry, { servers: accepted, warn });
-      if (server !== undefined) accepted.push(server);
+      const server = coerceStoredServer(entry, { servers: accepted, warn: report ? warn : undefined });
+      if (!server || ids.has(server.id)) {
+        skipped += 1;
+        if (report) warn(`ignoring invalid or duplicate persisted server at index ${accepted.length + skipped - 1}`);
+        continue;
+      }
+      ids.add(server.id);
+      accepted.push(server);
     }
-    return { servers: accepted, ui: coerceUi(document.ui, warn) };
+    return { servers: accepted, ui: coerceUi(document.ui, report ? warn : undefined), skipped };
   }
 
   function load() {
     if (loaded) return Promise.resolve(clone(servers));
-    loading ??= readDocument().then((document) => {
-      servers = document.servers;
-      ui = document.ui;
+    loading ??= (async () => {
+      try {
+        const document = parseDocument(await readFile(file, 'utf8'), true);
+        servers = document.servers;
+        ui = document.ui;
+        skippedRecords = document.skipped;
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          storageError = `Could not load configuration: ${error?.message ?? String(error)}`;
+          warn(storageError);
+        }
+      }
+      try {
+        parseDocument(await readFile(backupFile, 'utf8'));
+        hasBackup = true;
+      } catch { hasBackup = false; }
       loaded = true;
-      loading = undefined;
       return clone(servers);
-    }, (error) => {
-      loading = undefined;
-      warn(`could not load ${file}: ${error?.message ?? String(error)}`);
-      servers = [];
-      ui = { railEntry: DEFAULT_UI.railEntry };
-      loaded = true;
-      return [];
-    });
-    return loading.then((records) => clone(records));
+    })();
+    return loading.then(clone);
   }
 
-  function list() {
-    return clone(servers);
+  function list() { return clone(servers); }
+  function getUi() { return clone(ui); }
+  function status() {
+    return { readOnly: storageError !== undefined, hasBackup,
+      ...(skippedRecords ? { skippedRecords } : {}), ...(storageError ? { error: storageError } : {}) };
   }
 
-  /** @returns {{ railEntry: boolean }} resolved page-level preference. */
-  function getUi() {
-    return clone(ui);
-  }
-
-  async function writeSnapshot() {
-    const payload = `${JSON.stringify({ version: STORAGE_VERSION, servers, ui }, null, 2)}\n`;
-    await mkdir(path.dirname(file), { recursive: true });
-    const tempFile = `${file}.tmp-${process.pid}-${tempSequence += 1}`;
+  async function atomicWrite(target, payload) {
+    await mkdir(path.dirname(target), { recursive: true });
+    const temporary = `${target}.tmp-${process.pid}-${tempSequence += 1}-${randomUUID()}`;
     try {
-      const handle = await open(tempFile, 'w');
+      const handle = await open(temporary, 'wx', 0o600);
       try {
         await handle.writeFile(payload, 'utf8');
         await handle.sync();
-      } finally {
-        await handle.close();
+      } finally { await handle.close(); }
+      await rename(temporary, target);
+    } finally { await rm(temporary, { force: true }); }
+  }
+
+  async function persist(nextServers, nextUi, recovering = false) {
+    if (storageError && !recovering) throw new ManagerError('storage-readonly', storageError);
+    const payload = JSON.stringify({ version: STORAGE_VERSION, servers: nextServers, ui: nextUi }, null, 2) + '\n';
+    try {
+      if (!recovering) {
+        let previous;
+        try { previous = await readFile(file, 'utf8'); }
+        catch (error) { if (error?.code !== 'ENOENT') throw error; }
+        if (previous !== undefined) {
+          // Never replace an externally damaged document with a stale memory snapshot.
+          let parsed;
+          try { parsed = parseDocument(previous); }
+          catch (error) {
+            storageError = `Configuration changed or became unreadable: ${error.message}`;
+            throw new ManagerError('storage-readonly', storageError);
+          }
+          if (parsed.skipped) {
+            await atomicWrite(`${file}.recovery-${Date.now()}-${randomUUID()}`, previous);
+          }
+          await atomicWrite(backupFile, previous);
+          hasBackup = true;
+        }
       }
-      await rename(tempFile, file);
+      await atomicWrite(file, payload);
     } catch (error) {
-      await rm(tempFile, { force: true }).catch(() => {});
-      throw new ManagerError('internal', `could not persist MCP servers to ${file}: ${error?.message ?? String(error)}`);
+      if (error instanceof ManagerError) throw error;
+      throw new ManagerError('internal', `could not persist MCP servers: ${error?.message ?? String(error)}`);
     }
+    // Commit the in-memory state only after rename succeeds.
+    servers = clone(nextServers);
+    ui = clone(nextUi);
+    storageError = undefined;
+    skippedRecords = 0;
   }
 
   function enqueue(task) {
@@ -406,24 +453,46 @@ export function createStore(options = {}) {
 
   function setServers(next) {
     if (!Array.isArray(next)) throw new ManagerError('internal', 'servers must be an array');
+    const snapshot = clone(next);
     return enqueue(async () => {
-      servers = clone(next);
-      await writeSnapshot();
-      return clone(servers);
+      await load();
+      await persist(snapshot, ui);
+      return list();
     });
   }
 
   function setUi(next) {
     const normalized = validateUi(next);
     return enqueue(async () => {
-      ui = normalized;
-      await writeSnapshot();
-      return clone(ui);
+      await load();
+      await persist(servers, normalized);
+      return getUi();
+    });
+  }
+
+  function recover(mode) {
+    return enqueue(async () => {
+      await load();
+      if (!['backup', 'reset'].includes(mode)) throw new ManagerError('invalid', 'recovery mode must be backup or reset', 'mode');
+      const document = mode === 'backup'
+        ? parseDocument(await readFile(backupFile, 'utf8'))
+        : { servers: [], ui: { ...DEFAULT_UI } };
+      // Keep the exact original bytes, including unknown future versions.
+      let archive;
+      try {
+        await stat(file);
+        archive = `${file}.recovery-${Date.now()}-${randomUUID()}`;
+        await copyFile(file, archive);
+      } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      await persist(document.servers, document.ui, true);
+      return { servers: list(), archive };
     });
   }
 
   return {
     file,
+    status,
+    recover,
     load,
     list,
     ui: getUi,

@@ -60,5 +60,11 @@
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node scripts/test.mjs",
+    "test:regression": "node --test test/regression.test.mjs test/client.test.mjs",
+    "test:browser": "node scripts/browser.mjs"
   }
 }

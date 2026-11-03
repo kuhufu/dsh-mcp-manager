@@ -21,8 +21,12 @@
   服务器会列出来（入口 id + 实时工具数），可以在本页直接**启用/停用**（等同「设置 → 插件」里的
   开关），也能一键迁移。点「迁到此页」会**先停用原条目**再把配置复制成
   本页记录并连接，所以不会出现两条连接抢同一批工具名。
+- **连接选项与诊断**：握手、工具调用超时可分别设置；自动重连默认关闭，最多重试 10 次，
+  间隔逐次增加至 30 秒。展开详情可查看最近 50 条连接、工具刷新与调用结果记录，不记录调用参数或结果正文。
+- **工具管理**：显示实际注册名称，支持逐个启停；收到工具列表变化通知后自动刷新，保留停用选择。
+- **配置整理**：搜索、状态筛选、复制服务器，以及 JSON 批量导入导出。
 - **零依赖**：自带一个小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和
-  八条精确 Fetch 路由，无构建步骤。
+  十二条精确 Fetch 路由，无构建步骤。
 
 ## 截图
 
@@ -112,7 +116,10 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 ## 数据与安全
 
 - 配置存放在 `$DSH_HOME/storages/mcp-manager.json`（`$DSH_HOME` 默认 `~/.dsh`），原子写入，
-  读取时校验；文件损坏或来自旧版本时退化为空列表 + 默认偏好，不会让页面挂掉。
+  读取时校验。写入成功后才更新内存，文件权限为 `0600`；上一次有效配置保存在同目录 `.bak` 文件。
+- 文件损坏、无法读取或版本不支持时，页面进入只读恢复状态，阻止覆盖原配置。可选择恢复备份或使用空配置，
+  操作前均会把原文件归档为 `.recovery-<时间戳>-<uuid>`。旧版缺少 `version` 或 `ui` 的文档仍可读取并升级。
+- 单条无效或重复记录会跳过并提示，其余有效服务器仍可使用；下次保存前会先归档原文件。
 - 环境变量和请求头以**明文**保存。若被接管的 `dsh-mcp-client` 条目用了
   `!!js process.env.X`，复制过来的是求值后的真实值。
 - MCP 服务器是以你的用户身份启动的普通进程，本插件不额外加沙箱；只添加可信的服务器。
@@ -121,7 +128,7 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 
 | 部分 | 文件 | 职责 |
 | --- | --- | --- |
-| Host | `index.js` + `host/mcp.js`、`host/store.js`、`host/routes.js` | 记录、MCP 连接、工具注册与 Fetch 路由 |
+| Host | `index.js` + `host/manager.js`、`runtime.js`、`external.js`、`mcp.js`、`store.js`、`routes.js` | 记录、MCP 连接、工具注册与 Fetch 路由 |
 | Client | `client.js` | 一个 React 页面，注册进 `settings.section`；可选再注册 `sidebar.panellist` + `main` |
 
 页面通信全部走 Harness Fetch 桥上的精确 `POST` 路由（相对路径 `api/mcp-manager.*`，由浏览器
@@ -134,23 +141,36 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 | `takeover` | 停用一条 `dsh-mcp-client` 条目并重新建成本页记录 |
 | `toggle-external` | 启用/停用某条 `dsh-mcp-client` 条目 |
 | `ui` | `railEntry` 偏好 |
+| `import` / `export` | 批量导入、导出配置 |
+| `recover` | 归档原文件并恢复备份或重置 |
+| `tool` | 按原始工具名启停 |
 
 请求/响应结构、校验规则和工具桥接契约见 [CONTRACT.md](CONTRACT.md)。
 
 ## 开发
 
-纯 ESM，无构建步骤、无依赖，Node 22+。
+纯 ESM，无构建步骤、无运行时依赖，Node 22+。Node 测试只使用内置模块；浏览器测试另需开发依赖。
 
 ```bash
-node --check index.js && node --check client.js
-node test/mcp.smoke.mjs            # 29 项：传输、存储、路由、整插件生命周期
-node test/external.smoke.mjs       # 93 项：外部条目、一键接管、ui 偏好
-node test/takeover-race.smoke.mjs  # 8 项：接管时旧连接的异步释放竞态
-node test/patch-repair.smoke.mjs   # 23 项：修复在 profile patch 中重复声明的行
+npm run check         # 检查所有源码、脚本和测试的语法
+npm test              # 四套既有测试 + 后端、前端状态回归测试
+npm run test:regression
+npm run test:browser   # 完成 test/BROWSER.md 中的开发环境准备后运行
 ```
 
-四套测试都不依赖框架：驱动真实模块跑真实 stdio/HTTP 传输与假 MCP 服务器，并断言所有子进程
-都被回收。
+四套 smoke 分别包含 29 / 93 / 8 / 23 项检查；另有 26 项 Node 回归用例。
+测试使用真实 stdio/HTTP 传输和假 MCP 服务，覆盖进程回收、取消、持久化失败、恢复、动态工具及页面竞态。
+浏览器交互测试的隔离运行方式见 [test/BROWSER.md](test/BROWSER.md)，无需安装或启用 Harness 插件。
+
+## 导入、导出与复制
+
+在页面末尾的侧栏偏好行上方展开「导入 / 导出配置」，可以粘贴 JSON 或读取文件。支持服务器数组、带 `servers` 的导出文档，
+以及常见的 `{ "mcpServers": { "名称": { "command": "…" } } }` 格式，每批最多 200 台。
+整批校验通过才会保存；名称冲突会拒绝整批导入，导入的服务器均保持停用，补全配置后再手动启用。
+
+导出默认去掉环境变量和请求头，勾选「包含环境变量和请求头」才会写入这些明文值。
+命令参数和 URL 始终保留，其中若包含凭据，也会进入导出文件。服务器行的复制按钮会打开一个名称不重复、
+默认停用的草稿，确认保存后才创建新记录。
 
 ## 常见问题
 

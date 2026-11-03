@@ -26,7 +26,7 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
   **Migrate here** moves one over: it disables the source row first, then copies the config into
   this page and connects — so two connections never compete for the same tool names.
 - **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
-  atomic JSON persistence, and eight exact Fetch routes. No build step.
+  atomic JSON persistence, and twelve exact Fetch routes. No build step.
 
 ## Screenshots
 
@@ -125,8 +125,13 @@ the whole tool set atomically.
 ## Data and security
 
 - Records live in `$DSH_HOME/storages/mcp-manager.json` (`$DSH_HOME` defaults to `~/.dsh`),
-  written atomically and validated on load; a corrupt or legacy document degrades to empty
-  servers plus the default preferences instead of breaking the page.
+  written atomically with `0600` permissions. Memory is committed only after persistence succeeds.
+  The previous valid document is retained in `.bak`.
+- Corrupt, unreadable, or unsupported-version documents lock writes and offer backup restoration
+  or reset. Either action archives the original bytes in `.recovery-<time>-<uuid>`. Legacy
+  documents without `version` or `ui` remain readable and migrate on the next write.
+- Invalid or duplicate individual records are skipped with warnings; valid servers remain usable.
+  The original document is archived before the next write.
 - Environment variables and headers are stored there as **plain text**. If a migrated
   `dsh-mcp-client` row used `!!js process.env.X`, the copy holds the resolved value.
 - MCP servers are ordinary processes started as your user; this plugin adds no sandbox.
@@ -136,7 +141,7 @@ the whole tool set atomically.
 
 | Part | File | Role |
 | --- | --- | --- |
-| Host | `index.js` + `host/mcp.js`, `host/store.js`, `host/routes.js` | Owns records, MCP connections, tool registration and the Fetch routes. |
+| Host | `index.js` + `host/manager.js`, `runtime.js`, `external.js`, `mcp.js`, `store.js`, `routes.js` | Owns records, MCP connections, tool registration and the Fetch routes. |
 | Client | `client.js` | One React page registered into `settings.section`, plus the optional `sidebar.panellist` + `main` pair. |
 
 All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
@@ -149,23 +154,42 @@ All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
 | `takeover` | Disable a `dsh-mcp-client` entry and re-create it as a managed record |
 | `toggle-external` | Enable or disable a `dsh-mcp-client` entry |
 | `ui` | The `railEntry` preference |
+| `import` / `export` | Atomic batch import and credential-optional export |
+| `recover` | Archive the original and restore a backup or reset |
+| `tool` | Enable or disable a raw tool name |
 
 `CONTRACT.md` pins the request/response shapes, validation rules and tool-bridge contract.
 
 ## Development
 
-Plain ESM, no build step, no dependencies. Node 22+.
+Plain ESM, no build step or runtime dependencies. Node 22+. The Node suites use built-ins;
+the optional browser suite has separate development-only dependencies.
 
 ```bash
-node --check index.js && node --check client.js
-node test/mcp.smoke.mjs            # 29 checks: transports, store, routes, full plugin lifecycle
-node test/external.smoke.mjs       # 93 checks: foreign entries, migration, ui preference
-node test/takeover-race.smoke.mjs  # 8 checks: the asynchronous tool release during a migration
-node test/patch-repair.smoke.mjs   # 23 checks: repairing a row the profile patch declares twice
+npm run check
+npm test
+npm run test:regression
+npm run test:browser  # after preparing the environment in test/BROWSER.md
 ```
 
-All four suites are framework-free: they drive the real modules over real stdio/HTTP transports
-(and a real fake MCP server), and assert that every spawned process is reaped.
+The four smoke suites contain 29 / 93 / 8 / 23 checks, plus 26 Node regression cases.
+Tests exercise real stdio/HTTP transports, lifecycle cleanup, failed writes, recovery, cancellation,
+dynamic tools and frontend response ordering. See [test/BROWSER.md](test/BROWSER.md) for the isolated
+browser interaction suite; no Harness installation or plugin activation is needed.
+
+## Connection and configuration options
+
+- Set handshake and tool timeouts separately. Automatic reconnect defaults to off, with a limit
+  of 0–10 retries and exponential intervals capped at 30 seconds. Manual reconnect resets the budget.
+- Expand a server to see actual public tool names, toggle individual tools, and inspect the last
+  50 connection/refresh/call events. Tool arguments and result bodies are excluded from activity.
+  Tool-list change notifications refresh the catalog while preserving disabled selections.
+- Search/filter servers, or duplicate a server into an editable, uniquely named disabled draft.
+- Import a server array, `{ version: 1, servers: [...] }`, or `{ mcpServers: { name: config } }`.
+  Each batch contains 1–200 records, is validated atomically, rejects duplicate names, and imports
+  every server disabled. Fill missing credentials before enabling it.
+- Export omits environment variables and headers unless explicitly included. Command arguments
+  and URLs remain in exports and can themselves contain credentials.
 
 ## Troubleshooting
 

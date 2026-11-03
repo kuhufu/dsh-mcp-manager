@@ -36,6 +36,7 @@ import {
   sanitizePublicName,
 } from '../host/mcp.js';
 import {
+  ROUTE_PATHS,
   EXTERNAL_TOGGLE_PATH,
   LIST_PATH,
   RECONNECT_PATH,
@@ -458,7 +459,8 @@ async function main() {
     );
     const document = JSON.parse(await readFile(storeFile, 'utf8'));
     assert.equal(document.servers[0].name, 'alpha-19', 'the last queued write wins');
-    const leftovers = (await readdir(path.dirname(storeFile))).filter((name) => name !== 'mcp-manager.json');
+    const leftovers = (await readdir(path.dirname(storeFile))).filter((name) => name.includes('.tmp-'));
+    assert.ok((await readdir(path.dirname(storeFile))).includes('mcp-manager.json.bak'), 'previous good snapshot is backed up');
     assert.deepEqual(leftovers, [], 'no temp files remain after concurrent writes');
   });
 
@@ -611,10 +613,13 @@ async function main() {
     });
   });
 
-  await test('the eight Fetch routes match the pinned paths and failure shape', async () => {
+  await test('the twelve Fetch routes match the pinned paths and failure shape', async () => {
     const view = { id: 's1', name: 'alpha', status: 'ready', tools: [], toolCount: 0 };
     let railEntry = true;
     const manager = {
+      ready: async () => {},
+      external: () => [],
+      storage: () => ({ readOnly: false, hasBackup: false }),
       list: () => [view],
       save: async ({ id, server }) => {
         if (server.name === 'dup') throw new ManagerError('duplicate-name', 'dup', 'name');
@@ -634,7 +639,7 @@ async function main() {
     const routes = createFetchRoutes(manager);
     assert.deepEqual(
       routes.map((route) => route.path),
-      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, EXTERNAL_TOGGLE_PATH, UI_PATH],
+      [...ROUTE_PATHS],
     );
     for (const route of routes) {
       assert.deepEqual(route.methods, ['POST']);
@@ -651,12 +656,12 @@ async function main() {
     assert.equal(listResponse.status, 200);
     assert.equal(listResponse.headers.get('cache-control'), 'no-store');
     assert.match(listResponse.headers.get('content-type') ?? '', /application\/json/);
-    assert.deepEqual(await listResponse.json(), { ok: true, servers: [view], ui: { railEntry: true } });
+    assert.deepEqual(await listResponse.json(), { ok: true, servers: [view], ui: { railEntry: true }, external: [], storage: { readOnly: false, hasBackup: false } });
 
     const uiResponse = await routeOf(UI_PATH).fetch(jsonRequest({ railEntry: false }));
     assert.deepEqual(
       await uiResponse.json(),
-      { ok: true, servers: [view], ui: { railEntry: false } },
+      { ok: true, servers: [view], ui: { railEntry: false }, external: [], storage: { readOnly: false, hasBackup: false } },
       'the ui route persists and echoes the preference',
     );
     const badUi = await routeOf(UI_PATH).fetch(jsonRequest({ railEntry: 'yes' }));
@@ -787,11 +792,11 @@ async function main() {
   };
 
   let pluginServerId;
-  await test('apply registers the eight routes on ctx.connection.fetch', () => {
+  await test('apply registers the twelve routes on ctx.connection.fetch', () => {
     apply(ctx);
     assert.deepEqual(
       [...routesByPath.keys()].sort(),
-      [LIST_PATH, SAVE_PATH, REMOVE_PATH, TOGGLE_PATH, RECONNECT_PATH, TAKEOVER_PATH, EXTERNAL_TOGGLE_PATH, UI_PATH].sort(),
+      [...ROUTE_PATHS].sort(),
     );
     assert.equal(effects.length, 2, 'lifecycle and routes effects are registered');
   });
@@ -1014,10 +1019,10 @@ async function main() {
 
   await test('remove deletes the record and unregisters its tools', async () => {
     const removed = await call(REMOVE_PATH, { id: pluginServerId });
-    assert.deepEqual(removed, { ok: true, servers: [], external: [], ui: { railEntry: true } });
+    assert.deepEqual(removed, { ok: true, servers: [], external: [], ui: { railEntry: true }, storage: { readOnly: false, hasBackup: true } });
     assert.equal(registeredTools.size, 0);
     const payload = await call(LIST_PATH, {});
-    assert.deepEqual(payload, { ok: true, servers: [], external: [], ui: { railEntry: true } });
+    assert.deepEqual(payload, { ok: true, servers: [], external: [], ui: { railEntry: true }, storage: { readOnly: false, hasBackup: true } });
   });
 
   await test('plugin unload removes every route and kills every child process', async () => {

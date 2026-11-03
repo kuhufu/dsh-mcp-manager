@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- Commit in-memory configuration only after successful persistence; retain a previous-good
+  backup and protect corrupt/future-version files until explicit, archived recovery.
+- Use the initialize result for HTTP protocol negotiation; abort canceled/timed-out HTTP
+  requests, distinguish server requests from responses, and clean up failed sessions.
+- Serialize frontend mutations across both surfaces, reject stale polls, abort reads on
+  unmount, and preserve environment-value whitespace when editing.
+
+- Preserve valid records when individual stored rows are invalid, archiving the original before
+  the next write; validate raw tool names and omit secret fields entirely from default exports.
+- Keep saving dialogs dismissible, protect newer editors from older save completions, show
+  accurate external-only filter results, and retain the sidebar preference as the final row.
+
+### Added
+
+- Configurable handshake/tool deadlines, bounded exponential reconnect, and recent activity.
+- Public tool names, per-tool enablement, and dynamic tool-catalog notifications.
+- Atomic JSON batch import (disabled by default), credential-optional export, copy, search,
+  status filtering, and a confirmed storage recovery interface.
+- Host/runtime/migration module separation, a shared client data hook, regression tests,
+  a separate `npm run test:browser` command with a CI browser job, and unified
+  `npm test` / `npm run check` commands.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

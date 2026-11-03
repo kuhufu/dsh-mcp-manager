@@ -24,6 +24,8 @@ import { spawn } from 'node:child_process';
 
 /** MCP protocol revision this client speaks. */
 export const PROTOCOL_VERSION = '2025-06-18';
+/** Protocol revisions this implementation can negotiate during initialization. */
+export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);
 
 /** Client identity announced during `initialize`. */
 export const CLIENT_INFO = Object.freeze({ name: 'dsh-mcp-manager', version: '0.1.0' });
@@ -288,7 +290,9 @@ export function createHttpTransport(server) {
   const fail = (error) => {
     if (closed) return;
     closed = true;
+    controller.abort();
     closeHandler({ error });
+    void close();
   };
 
   async function readEventStream(response, id) {
@@ -315,7 +319,7 @@ export function createHttpTransport(server) {
           } catch {
             continue;
           }
-          if (containsResponseFor(payload, id)) matched = true;
+          if (id !== undefined && containsResponseFor(payload, id)) matched = true;
           dispatch(payload);
         }
       }
@@ -326,29 +330,27 @@ export function createHttpTransport(server) {
         // Reader already finished or the connection dropped.
       }
     }
-    if (!matched) throw new McpError('HTTP event stream ended before the JSON-RPC response arrived');
+    if (id !== undefined && !matched) throw new McpError('HTTP event stream ended before the JSON-RPC response arrived');
   }
 
-  async function send(message) {
+  async function send(message, options = {}) {
     if (closed) throw new McpError('HTTP transport is closed');
-    const expectsResponse = isRequestId(message.id);
+    const expectsResponse = typeof message.method === 'string' && isRequestId(message.id);
     let response;
     try {
       response = await fetch(endpoint, {
         method: 'POST',
         headers: headersFor(),
         body: JSON.stringify(message),
-        signal: controller.signal,
+        signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
       });
     } catch (error) {
-      fail(error);
+      if (!options.signal?.aborted) fail(error);
       throw new McpError(`MCP HTTP request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
 
     const issuedSession = response.headers.get('mcp-session-id');
     if (issuedSession !== null && issuedSession !== '') sessionId = issuedSession;
-    const issuedVersion = response.headers.get('mcp-protocol-version');
-    if (issuedVersion !== null && issuedVersion !== '') protocolVersion = issuedVersion;
 
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
 
@@ -386,7 +388,6 @@ export function createHttpTransport(server) {
   let closing;
   async function close() {
     closing ??= (async () => {
-      if (closed) return;
       closed = true;
       controller.abort();
       const activeSession = sessionId;
@@ -419,6 +420,19 @@ export function createHttpTransport(server) {
     },
     send,
     close,
+    setProtocolVersion(value) {
+      protocolVersion = value;
+    },
+    listen() {
+      // Optional server notification stream. A 405 means POST-only support.
+      void (async () => {
+        try {
+          const response = await fetch(endpoint, { headers: { ...headersFor(), accept: 'text/event-stream' }, signal: controller.signal });
+          if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) await readEventStream(response);
+          else await response.body?.cancel();
+        } catch { /* POST requests still work if the optional stream is unavailable. */ }
+      })();
+    },
   };
 }
 
@@ -459,9 +473,11 @@ export function createRpcConnection(transport, options = {}) {
   /** @type {Map<string|number, object>} */
   const pending = new Map();
   const closeListeners = [];
+  const notificationListeners = new Set();
   let nextId = 1;
   let closed = false;
   let closeReason;
+  let closing;
 
   const describeTransportClose = (info) => {
     if (info?.error !== undefined) {
@@ -477,6 +493,7 @@ export function createRpcConnection(transport, options = {}) {
     for (const entry of pending.values()) {
       clearTimeout(entry.timer);
       entry.removeAbortListener?.();
+      entry.controller.abort();
       entry.reject(new McpError(reason));
     }
     pending.clear();
@@ -487,6 +504,7 @@ export function createRpcConnection(transport, options = {}) {
     closed = true;
     closeReason = describeTransportClose(info);
     settleAll(closeReason);
+    void close().catch(() => {});
     for (const listener of closeListeners.splice(0)) {
       try {
         listener(closeReason);
@@ -497,7 +515,19 @@ export function createRpcConnection(transport, options = {}) {
   };
 
   transport.setMessageHandler((message) => {
-    if (!isRecord(message) || !isRequestId(message.id)) return;
+    if (!isRecord(message) || message.jsonrpc !== '2.0') return;
+    if (typeof message.method === 'string') {
+      if (isRequestId(message.id)) {
+        const reply = message.method === 'ping' ? { result: {} } : { error: { code: -32601, message: 'Method not found' } };
+        void Promise.resolve().then(() => transport.send({ jsonrpc: '2.0', id: message.id, ...reply }, { signal: AbortSignal.timeout(2_000) })).catch(() => {});
+      } else {
+        for (const listener of notificationListeners) {
+          try { listener(message.method, message.params); } catch { /* isolate subscribers */ }
+        }
+      }
+      return;
+    }
+    if (!isRequestId(message.id) || (!('result' in message) && !('error' in message))) return;
     const entry = pending.get(message.id);
     if (entry === undefined) return;
     pending.delete(message.id);
@@ -517,6 +547,7 @@ export function createRpcConnection(transport, options = {}) {
     if (closed) return Promise.reject(new McpError(`${label}: connection is closed${closeReason === undefined ? '' : ` (${closeReason})`}`));
     const timeoutMs = requestOptions.timeoutMs ?? requestTimeoutMs;
     const signal = requestOptions.signal;
+    const controller = new AbortController();
     const id = nextId;
     nextId += 1;
     /** @type {Record<string, unknown>} */
@@ -531,14 +562,24 @@ export function createRpcConnection(transport, options = {}) {
       const timer = setTimeout(() => {
         if (!pending.delete(id)) return;
         finish();
+        cancel('Request timed out');
         reject(new McpError(`${label}: ${method} timed out after ${timeoutMs} ms`));
       }, timeoutMs);
       const onAbort = () => {
         if (!pending.delete(id)) return;
         finish();
+        cancel('Request canceled');
         reject(new McpError(`${label}: ${method} was canceled`));
       };
+      let sent = false;
+      const cancel = (reason) => {
+        controller.abort();
+        if (sent && method !== 'initialize' && !closed) {
+          void notify('notifications/cancelled', { requestId: id, reason }).catch(() => {});
+        }
+      };
       pending.set(id, {
+        controller,
         resolve(value) {
           finish();
           resolve(value);
@@ -558,7 +599,11 @@ export function createRpcConnection(transport, options = {}) {
         signal.addEventListener('abort', onAbort, { once: true });
       }
       Promise.resolve()
-        .then(() => transport.send(message))
+        .then(() => {
+          if (controller.signal.aborted || closed) return;
+          sent = true;
+          return transport.send(message, { signal: controller.signal });
+        })
         .catch((error) => {
           if (!pending.delete(id)) return;
           finish();
@@ -573,24 +618,29 @@ export function createRpcConnection(transport, options = {}) {
     const message = { jsonrpc: '2.0', method };
     if (params !== undefined) message.params = params;
     try {
-      await transport.send(message);
+      await transport.send(message, { signal: AbortSignal.timeout(requestTimeoutMs) });
     } catch (error) {
       throw error instanceof McpError ? error : new McpError(`${label}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   }
 
   async function close() {
-    if (closed) return;
     closed = true;
-    closeReason = `${label}: connection closed`;
+    closeReason ??= `${label}: connection closed`;
     settleAll(closeReason);
+    notificationListeners.clear();
+    closing ??= Promise.resolve().then(() => transport.close());
+    await closing;
     closeListeners.splice(0);
-    await transport.close();
   }
 
   return {
     request,
     notify,
+    onNotification(listener) {
+      notificationListeners.add(listener);
+      return () => notificationListeners.delete(listener);
+    },
     close,
     get closed() {
       return closed;
@@ -654,6 +704,10 @@ export async function connect(server, options = {}) {
       { timeoutMs: initializeTimeoutMs },
     );
     if (!isRecord(init)) throw new McpError(`${label}: initialize returned a non-object result`);
+    if (!SUPPORTED_PROTOCOL_VERSIONS.includes(init.protocolVersion)) {
+      throw new McpError(`${label}: unsupported MCP protocol version ${String(init.protocolVersion)}`);
+    }
+    transport.setProtocolVersion?.(init.protocolVersion);
     await rpc.notify('notifications/initialized');
     const capabilities = isRecord(init.capabilities) ? init.capabilities : {};
     const tools = capabilities.tools === undefined ? [] : await listAllTools(rpc, requestTimeoutMs);
@@ -666,6 +720,16 @@ export async function connect(server, options = {}) {
       protocolVersion: typeof init.protocolVersion === 'string' ? init.protocolVersion : undefined,
       instructions: instructions === '' ? undefined : instructions,
       tools,
+      listTools() {
+        return listAllTools(rpc, requestTimeoutMs);
+      },
+      onToolsChanged(listener) {
+        const dispose = rpc.onNotification((method) => {
+          if (method === 'notifications/tools/list_changed') listener();
+        });
+        if (capabilities.tools?.listChanged) transport.listen?.();
+        return dispose;
+      },
       callTool(rawName, args, signal) {
         return rpc.request('tools/call', { name: rawName, arguments: args ?? {} }, { timeoutMs: requestTimeoutMs, signal });
       },
@@ -691,16 +755,19 @@ async function listAllTools(rpc, requestTimeoutMs) {
   /** @type {object[]} */
   const tools = [];
   let cursor;
+  const cursors = new Set();
   for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
     const result = await rpc.request('tools/list', cursor === undefined ? {} : { cursor }, { timeoutMs: requestTimeoutMs });
-    if (!isRecord(result)) break;
+    if (!isRecord(result) || !Array.isArray(result.tools)) throw new McpError('Invalid tools/list response');
     if (Array.isArray(result.tools)) {
       for (const tool of result.tools) if (isRecord(tool) && typeof tool.name === 'string' && tool.name !== '') tools.push(tool);
     }
     cursor = typeof result.nextCursor === 'string' && result.nextCursor !== '' ? result.nextCursor : undefined;
-    if (cursor === undefined) break;
+    if (cursor === undefined) return tools;
+    if (cursors.has(cursor)) throw new McpError('Repeated tools/list cursor');
+    cursors.add(cursor);
   }
-  return tools;
+  throw new McpError('Too many tools/list pages');
 }
 
 /** Normalize MCP `serverInfo` to the persisted view vocabulary. */
