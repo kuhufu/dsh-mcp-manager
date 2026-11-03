@@ -2025,7 +2025,8 @@ window.__ModuleLoader__.load({
               h('option', { value: 'all' }, t('all')),
               ['ready', 'connecting', 'error', 'disabled', 'stopped'].map((value) => h('option', { key: value, value }, t(PHASE_KEY[value])))),
             h('span', { className: 'dshmcp-caret', 'aria-hidden': 'true' }, h(Icon, { name: 'chevron', size: 14 }))),
-          h('button', { className: 'dshmcp-btn', type: 'button', onClick: () => requestList(true) }, t('refreshStatus'))),
+          h('button', { className: 'dshmcp-btn dshmcp-btn-square', type: 'button', 'aria-label': t('add'), title: t('add'), onClick: () => openEditor('add', null) }, h(Icon, { name: 'plus' })),
+          h('button', { className: 'dshmcp-btn dshmcp-btn-square', type: 'button', 'aria-label': t('refreshStatus'), title: t('refreshStatus'), onClick: () => requestList(true) }, h(Icon, { name: 'refresh' }))),
         h('div', { inert: storage.readOnly ? '' : undefined },
         loading
           ? h(SkeletonRows, { t })
@@ -2060,20 +2061,7 @@ window.__ModuleLoader__.load({
                       }),
                     ),
                   ),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dshmcp-add-row',
-                      onClick: () => openEditor('add', null),
-                    },
-                    h(Icon, { name: 'plus' }),
-                    t('add'),
-                  ),
                 ),
-        !loading && rows.length === 0 && external.length > 0
-          ? h('button', { type: 'button', className: 'dshmcp-add-row', onClick: () => openEditor('add', null) }, h(Icon, { name: 'plus' }), t('add'))
-          : null,
         foreign.length === 0
           ? null
           : h(ExternalList, { t, items: foreign, busyIds, onTakeover: takeoverServer, onToggle: toggleExternal }),
@@ -2167,11 +2155,9 @@ window.__ModuleLoader__.load({
 .dshmcp-banner .dshmcp-btn{flex:none;align-self:center}
 .dshmcp-list{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
 .dshmcp-row{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-module-platform);min-width:0}
-.dshmcp-add-row{box-sizing:border-box;width:100%;height:44px;margin-top:10px;border-radius:var(--dsw-radius-lg);border:1px dashed var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:14px;line-height:22px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.dshmcp-btn-square{width:36px;padding:0}
 .dshmcp-external{display:flex;flex-direction:column;gap:8px;margin-top:20px}
 .dshmcp-external .dshmcp-row{background:transparent;border:.5px dashed var(--dsw-alias-border-l2)}
-.dshmcp-add-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.dshmcp-add-row:focus-visible{box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline:none}
 .dshmcp-line{display:flex;align-items:center;gap:12px;min-width:0}
 .dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
 .dshmcp-dot[data-state=ready]{background:var(--dsw-alias-state-success-primary)}
