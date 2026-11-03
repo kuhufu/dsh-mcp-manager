@@ -2020,9 +2020,11 @@ window.__ModuleLoader__.load({
         h(StorageRecovery, { t, storage, actions }),
         h('div', { className: 'dshmcp-toolbar' },
           h('input', { type: 'search', className: 'dshmcp-input', 'aria-label': t('search'), placeholder: t('search'), value: query, onChange: (event) => setQuery(event.target.value) }),
-          h('select', { className: 'dshmcp-select', 'aria-label': t('filter'), value: filter, onChange: (event) => setFilter(event.target.value) },
-            h('option', { value: 'all' }, t('all')),
-            ['ready', 'connecting', 'error', 'disabled', 'stopped'].map((value) => h('option', { key: value, value }, t(PHASE_KEY[value])))),
+          h('div', { className: 'dshmcp-filter' },
+            h('select', { className: 'dshmcp-select dshmcp-select-filter', 'aria-label': t('filter'), value: filter, onChange: (event) => setFilter(event.target.value) },
+              h('option', { value: 'all' }, t('all')),
+              ['ready', 'connecting', 'error', 'disabled', 'stopped'].map((value) => h('option', { key: value, value }, t(PHASE_KEY[value])))),
+            h('span', { className: 'dshmcp-caret', 'aria-hidden': 'true' }, h(Icon, { name: 'chevron', size: 14 }))),
           h('button', { className: 'dshmcp-btn', type: 'button', onClick: () => requestList(true) }, t('refreshStatus'))),
         h('div', { inert: storage.readOnly ? '' : undefined },
         loading
@@ -2107,7 +2109,9 @@ window.__ModuleLoader__.load({
     const STYLE_TEXT = `
 .dshmcp-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
 .dshmcp-toolbar>.dshmcp-input{flex:1;min-width:160px}
-.dshmcp-toolbar>.dshmcp-select{width:auto;max-width:100%}
+.dshmcp-toolbar>.dshmcp-filter{position:relative;display:inline-flex;align-items:center;width:auto;max-width:100%}
+.dshmcp-toolbar .dshmcp-select-filter{appearance:none;-webkit-appearance:none;width:auto;min-width:0;padding:0 34px 0 12px;background-image:none}
+.dshmcp-caret{position:absolute;right:14px;top:50%;transform:translateY(-50%);display:flex;pointer-events:none;color:var(--dsw-alias-label-secondary)}
 .dshmcp-transfer,.dshmcp-recovery{padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);min-width:0}
 .dshmcp-transfer>summary,.dshmcp-log>summary{cursor:pointer;padding:4px 0}
 .dshmcp-transfer>*{max-width:100%}
