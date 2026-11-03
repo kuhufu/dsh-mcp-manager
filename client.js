@@ -833,7 +833,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dshmcp-external' },
-        h('h3', { className: 'dshmcp-subtitle' }, t('externalTitle')),
+        h('h3', { className: 'dshmcp-subtitle dshmcp-external-title' }, t('externalTitle')),
         h('p', { className: 'dshmcp-hint' }, t('externalHint')),
         h(
           'ul',
@@ -2101,6 +2101,8 @@ window.__ModuleLoader__.load({
 .dshmcp-toolbar .dshmcp-select-filter{appearance:none;-webkit-appearance:none;width:auto;min-width:0;padding:0 34px 0 12px;background-image:none}
 .dshmcp-caret{position:absolute;right:14px;top:50%;transform:translateY(-50%);display:flex;pointer-events:none;color:var(--dsw-alias-label-secondary)}
 .dshmcp-transfer,.dshmcp-recovery{padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);min-width:0}
+.dshmcp-transfer{position:relative;margin-top:24px}
+.dshmcp-transfer::before{content:"";position:absolute;left:0;right:0;top:-16px;height:0;border-top:.5px solid var(--dsw-alias-border-l2)}
 .dshmcp-transfer>summary,.dshmcp-log>summary{cursor:pointer;padding:4px 0}
 .dshmcp-transfer>*{max-width:100%}
 .dshmcp-transfer>label,.dshmcp-transfer>input{margin:8px 0}
@@ -2156,7 +2158,7 @@ window.__ModuleLoader__.load({
 .dshmcp-list{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
 .dshmcp-row{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-module-platform);min-width:0}
 .dshmcp-btn-square{width:36px;padding:0}
-.dshmcp-external{display:flex;flex-direction:column;gap:8px;margin-top:20px}
+.dshmcp-external{display:flex;flex-direction:column;gap:8px;margin-top:20px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l2)}
 .dshmcp-external .dshmcp-row{background:transparent;border:.5px dashed var(--dsw-alias-border-l2)}
 .dshmcp-line{display:flex;align-items:center;gap:12px;min-width:0}
 .dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
@@ -2200,6 +2202,7 @@ window.__ModuleLoader__.load({
 .dshmcp-tool-desc{grid-column:1/-1;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dshmcp-detail-block{display:flex;flex-direction:column;gap:4px}
 .dshmcp-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px}
+.dshmcp-external-title{font-size:15px;line-height:22px}
 .dshmcp-instructions{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;white-space:pre-wrap;max-height:132px;overflow-y:auto}
 .dshmcp-facts{display:flex;flex-direction:column;gap:2px;margin:0}
 .dshmcp-fact{display:flex;gap:8px;font-size:12px;line-height:18px;min-width:0}
