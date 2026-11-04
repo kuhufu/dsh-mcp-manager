@@ -6,6 +6,7 @@
 
 import { formatError } from './errors.js';
 import { connect, buildToolDefinitions } from './mcp.js';
+import { CONNECTION_FINGERPRINT, connectionFingerprint } from './store.js';
 
 /**
  * MCP connection lifetimes, retry scheduling, tool registrations and activity.
@@ -22,6 +23,8 @@ import { connect, buildToolDefinitions } from './mcp.js';
  */
 export function createRuntime({ ctx, store, logger, track, warn, fail, isDisposed }) {
   const runtime = new Map();
+  /** Connection identity of records that are not committed store snapshots (see {@link fingerprintOf}). */
+  const fingerprints = new WeakMap();
   /** @type {Set<(serverId: string) => void>} */
   const definitionListeners = new Set();
   /** @type {Set<string>|null} desired connection set; `null` follows each record's own flag. */
@@ -95,18 +98,16 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
 
   /** Fields whose change requires a fresh connection and tool swap. */
   function fingerprintOf(server) {
-    return JSON.stringify([
-      server.name,
-      server.transport,
-      server.command,
-      server.args,
-      server.env,
-      server.cwd,
-      server.url,
-      server.headers,
-      server.requestTimeoutMs,
-      server.initializeTimeoutMs,
-    ]);
+    // Committed records carry the identity computed when they were stored.
+    const stamped = server?.[CONNECTION_FINGERPRINT];
+    if (typeof stamped === 'string') return stamped;
+    // Uncommitted edits (a toggle, a tool switch) have no stamp: derive it once
+    // per object instead of re-serializing the record on every reconcile.
+    const known = fingerprints.get(server);
+    if (known !== undefined) return known;
+    const value = connectionFingerprint(server);
+    fingerprints.set(server, value);
+    return value;
   }
 
   function log(state, level, message) {
@@ -135,7 +136,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.retryTimer = setTimeout(() => {
       state.retryTimer = undefined;
       state.nextRetryAt = undefined;
-      const current = store.list().find((item) => item.id === server.id);
+      const current = store.get(server.id);
       if (!isDisposed() && wantsConnection(current)) track(startServer(current));
     }, delay);
   }
@@ -243,12 +244,12 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
       state.error = reason;
       warn(`"${server.name}" connection closed: ${reason}`);
       log(state, 'error', reason);
-      retry(store.list().find((item) => item.id === server.id) ?? server, state);
+      retry(store.get(server.id) ?? server, state);
     });
 
     if (connection.closed) return;
     try {
-      installTools(store.list().find((item) => item.id === server.id) ?? server, state, connection, connection.tools);
+      installTools(store.get(server.id) ?? server, state, connection, connection.tools);
     } catch (error) {
       await connection.close().catch(() => {});
       state.connection = undefined;
@@ -271,7 +272,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
             dirty = false;
             const tools = await connection.listTools();
             if (state.connection !== connection || isDisposed()) return;
-            const current = store.list().find((item) => item.id === server.id);
+            const current = store.get(server.id);
             if (!wantsConnection(current)) return;
             installTools(current, state, connection, tools);
             log(state, 'info', `Tool list refreshed: ${state.toolCount} enabled`);

@@ -36,6 +36,12 @@ export function createMcpManager({ ctx, logger }) {
   let mutationChain = Promise.resolve();
   /** @type {Promise<void>|undefined} */
   let booted;
+  /**
+   * Bumped whenever the Host tool catalog may have changed. The external-entry
+   * rows derive their tool counts from that catalog, so this counter is the
+   * cache key that lets them be computed once per change instead of per read.
+   */
+  let toolsGeneration = 0;
 
   const warn = (message) => {
     if (typeof logger?.warn === 'function') logger.warn(`mcp-manager: ${message}`);
@@ -83,6 +89,9 @@ export function createMcpManager({ ctx, logger }) {
   const sessionState = createSessionState({ logger });
   const externalDefaults = createExternalDefaults({ logger });
   const agents = createAgentRegistry({ runtime: { definitionsOf, revisionOf, subscribe }, sessionState, listServers: () => store.list(), listExternal: () => external(), listToolSchemas: () => ctx.tools.schemas(), autoInjectOf: (entryId) => externalDefaults.autoInjectOf(entryId), warn });
+  // Our own registrations change the catalog too; invalidate on every definition
+  // swap instead of relying on the Host to emit `tools/change` for them.
+  const unsubscribeDefinitions = subscribe(() => { toolsGeneration += 1; });
 
   /**
    * Recompute which servers need a connection: every globally enabled server,
@@ -112,13 +121,13 @@ export function createMcpManager({ ctx, logger }) {
   /**
    * Resolve one persisted record by id or raise `not-found`.
    * @param {unknown} id - requested id.
-   * @returns {object} persisted record.
+   * @returns {object} persisted record (the shared frozen snapshot; copy to edit).
    */
   function requireServer(id) {
     if (typeof id !== 'string' || id === '') {
       throw new ManagerError('invalid', 'request body must include a non-empty "id"', 'id');
     }
-    const server = store.list().find((entry) => entry.id === id);
+    const server = store.get(id);
     if (server === undefined) throw new ManagerError('not-found', `no MCP server with id "${id}"`);
     return server;
   }
@@ -275,7 +284,7 @@ export function createMcpManager({ ctx, logger }) {
       }
       if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > 200) throw new ManagerError('invalid', 'Import must contain 1–200 servers', 'document');
       if (document?.version !== undefined && document.version !== 1) throw new ManagerError('invalid', 'Unsupported import version', 'document');
-      const next = store.list();
+      const next = [...store.list()];
       for (const input of inputs) {
         const validated = validateServerInput({ ...input, enabled: false }, { servers: next });
         next.push(buildServerRecord(validated));
@@ -333,25 +342,37 @@ export function createMcpManager({ ctx, logger }) {
     return {
       sessionId,
       overrides,
-      external: external().map((item) => ({
-        entryId: item.entryId,
-        serverName: item.serverName,
-        enabled: item.enabled,
-        toolCount: item.toolCount,
-        autoInject: externalDefaults.autoInjectOf(item.entryId),
-        visible: externalOverrides[item.entryId] === undefined
-          ? item.enabled === true && externalDefaults.autoInjectOf(item.entryId)
-          : externalOverrides[item.entryId],
-      })),
-      servers: list().map((view) => ({
-        id: view.id,
-        name: view.name,
-        enabled: view.enabled,
-        status: view.status,
-        toolCount: view.toolCount,
-        autoInject: view.autoInject !== false,
-        visible: overrides[view.id] === undefined ? view.enabled && view.autoInject !== false : overrides[view.id],
-      })),
+      external: external().map((item) => {
+        // Resolved once per row: it feeds both `autoInject` and `visible`.
+        const autoInject = externalDefaults.autoInjectOf(item.entryId);
+        return {
+          entryId: item.entryId,
+          serverName: item.serverName,
+          enabled: item.enabled,
+          toolCount: item.toolCount,
+          autoInject,
+          visible: externalOverrides[item.entryId] === undefined
+            ? item.enabled === true && autoInject
+            : externalOverrides[item.entryId],
+        };
+      }),
+      // The panel renders six fields, so project the record and its runtime
+      // entry directly. Going through `list()` would copy every tool and up to
+      // 50 log lines per server just to throw them away here.
+      servers: store.list().map((server) => {
+        const state = stateOf(server.id);
+        const autoInject = server.autoInject !== false;
+        const override = overrides[server.id];
+        return {
+          id: server.id,
+          name: server.name,
+          enabled: server.enabled,
+          status: state?.status ?? 'stopped',
+          toolCount: state?.toolCount ?? 0,
+          autoInject,
+          visible: override === undefined ? server.enabled === true && autoInject : override,
+        };
+      }),
     };
   }
 
@@ -502,6 +523,8 @@ export function createMcpManager({ ctx, logger }) {
    * @returns {void}
    */
   function refreshAgents() {
+    // The Host catalog changed, so the derived external rows are stale too.
+    toolsGeneration += 1;
     if (!disposed) agents.refreshExternal();
   }
 
@@ -533,6 +556,7 @@ export function createMcpManager({ ctx, logger }) {
   function dispose() {
     disposal ??= (async () => {
       disposed = true;
+      if (typeof unsubscribeDefinitions === 'function') unsubscribeDefinitions();
       // Interrupt active connections first, then drain mutations before the final sweep.
       await stopAll();
       await mutationChain;
@@ -548,6 +572,7 @@ export function createMcpManager({ ctx, logger }) {
 
   const { external, setExternalEnabled, takeover } = createExternalOperations({
     ctx, store, warn, enqueue, list, reconcile: applyDesired,
+    toolsGeneration: () => toolsGeneration,
     autoInjectOf: (entryId) => externalDefaults.autoInjectOf(entryId),
     adoptDefault: (entryId) => externalDefaults.set(entryId, true),
   });

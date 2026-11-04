@@ -17,9 +17,77 @@ import { ManagerError, buildServerRecord, validateServerInput } from './store.js
  * @param {(task: Function) => Promise<unknown>} dependencies.enqueue - Serialized mutation runner.
  * @param {() => object[]} dependencies.list - Current managed server views.
  * @param {(server: object) => void} dependencies.reconcile - Applies a migrated record to its connection.
+ * @param {() => number} [dependencies.toolsGeneration] - Counter bumped whenever the Host
+ *   tool catalog may have changed; lets the catalog scan be cached.
  * @returns {{external: Function, setExternalEnabled: Function, takeover: Function}} external-entry operations.
  */
-export function createExternalOperations({ ctx, store, warn, enqueue, list, reconcile, autoInjectOf, adoptDefault }) {
+export function createExternalOperations({ ctx, store, warn, enqueue, list, reconcile, autoInjectOf, adoptDefault, toolsGeneration }) {
+  /** Catalog index cache: the full `ctx.tools.schemas()` scan is the expensive half of `external()`. */
+  let catalogCache;
+  /** Managed-name cache, keyed by the identity of the shared store snapshot. */
+  let namesCache;
+
+  /** Read the Host tool catalog, tolerating a missing or throwing registry. */
+  function toolCatalog() {
+    try {
+      const current = ctx.tools !== undefined && typeof ctx.tools.schemas === 'function' ? ctx.tools.schemas() : [];
+      return Array.isArray(current) ? current : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Count catalog tool names per `mcp__<serverName>__` prefix.
+   *
+   * Every prefix the catalog actually contains is counted, so a `serverName`
+   * that itself contains `__` still resolves to an exact count instead of
+   * falling into a first-segment bucket.
+   *
+   * @param {object[]} schemas - unfiltered Host tool catalog.
+   * @returns {Map<string, number>} tool count per namespace prefix.
+   */
+  function prefixCounts(schemas) {
+    const counts = new Map();
+    for (const schema of schemas) {
+      if (schema === null || typeof schema !== 'object') continue;
+      const name = schema.name;
+      if (typeof name !== 'string' || !name.startsWith('mcp__')) continue;
+      for (let at = name.indexOf('__', 5); at >= 0; at = name.indexOf('__', at + 2)) {
+        const prefix = name.slice(0, at + 2);
+        counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }
+
+  /**
+   * Namespace counts, rescanned only when the caller's catalog generation moved.
+   * @returns {Map<string, number>} cached prefix counts.
+   */
+  function catalogCounts() {
+    const generation = typeof toolsGeneration === 'function' ? toolsGeneration() : undefined;
+    // Without a generation source, stay correct and uncached.
+    if (generation === undefined) return prefixCounts(toolCatalog());
+    if (catalogCache === undefined || catalogCache.generation !== generation) {
+      catalogCache = { generation, counts: prefixCounts(toolCatalog()) };
+    }
+    return catalogCache.counts;
+  }
+
+  /**
+   * Managed server names. `store.list()` hands back one shared frozen snapshot,
+   * so the set is rebuilt only when a write publishes a new one.
+   * @returns {Set<string>} tool namespaces this page owns.
+   */
+  function managedNames() {
+    const current = store.list();
+    if (namesCache === undefined || namesCache.snapshot !== current) {
+      namesCache = { snapshot: current, names: new Set(current.map((server) => server.name)) };
+    }
+    return namesCache.names;
+  }
+
   /** Resolve optional Cordis services without requiring a particular deployment. */
   function service(name) {
     try { return typeof ctx.get === 'function' ? ctx.get(name) : undefined; }
@@ -77,19 +145,23 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
     if (typeof serverName !== 'string' || serverName === '') return;
     const prefix = `mcp__${serverName}__`;
     const deadline = Date.now() + timeoutMs;
+    // Poll tightly at first (a released namespace is usually visible within one
+    // tick) and back off once it is clear the old connection is still tearing
+    // down, so a full 3 s wait costs a handful of catalog reads, not ~75.
+    let delay = 40;
     for (;;) {
       let busy = false;
       try {
-        const schemas = ctx.tools !== undefined && typeof ctx.tools.schemas === 'function' ? ctx.tools.schemas() : [];
-        busy = Array.isArray(schemas)
-          && schemas.some((schema) => schema !== null && typeof schema === 'object'
-            && typeof schema.name === 'string' && schema.name.startsWith(prefix));
+        busy = toolCatalog().some((schema) => schema !== null && typeof schema === 'object'
+          && typeof schema.name === 'string' && schema.name.startsWith(prefix));
       } catch {
         busy = false;
       }
       if (!busy) return;
-      if (Date.now() >= deadline) return;
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
+      delay = Math.min(200, delay * 2);
     }
   }
 
@@ -106,24 +178,19 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
   function external() {
     const loader = resolveLoader();
     if (!loader) return [];
-    let schemas = [];
-    try {
-      const current = ctx.tools !== undefined && typeof ctx.tools.schemas === 'function' ? ctx.tools.schemas() : [];
-      if (Array.isArray(current)) schemas = current;
-    } catch {
-      schemas = [];
-    }
-    const managedNames = new Set(store.list().map((server) => server.name));
+    // Both expensive halves are cached: the catalog scan by tool generation and
+    // the managed-name set by store snapshot. Rows themselves are rebuilt from
+    // the Loader every call, because a row's own enablement flips without any
+    // tool-catalog event (Settings → Plugins, profile reload).
+    const counts = catalogCounts();
+    const managed = managedNames();
     const rows = [];
     for (const entry of loader.entries()) {
       const options = entry === null || entry === undefined ? undefined : entry.options;
       if (options === undefined || options === null || options.name !== '@deepseek-ai/dsh-mcp-client') continue;
       const config = options.config !== null && typeof options.config === 'object' ? options.config : {};
       const serverName = typeof config.serverName === 'string' && config.serverName !== '' ? config.serverName : undefined;
-      const prefix = serverName === undefined ? undefined : `mcp__${serverName}__`;
-      const toolCount = prefix === undefined
-        ? 0
-        : schemas.filter((schema) => schema !== null && typeof schema === 'object' && typeof schema.name === 'string' && schema.name.startsWith(prefix)).length;
+      const toolCount = serverName === undefined ? 0 : counts.get(`mcp__${serverName}__`) ?? 0;
       rows.push({
         entryId: typeof entry.id === 'string' ? entry.id : (typeof options.id === 'string' ? options.id : ''),
         serverName,
@@ -134,7 +201,7 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
         enabled: entry.disabled !== true,
         // A managed record with this name owns the namespace; switching the source
         // on would collide with it, so the page disables that control.
-        shadowed: serverName !== undefined && managedNames.has(serverName),
+        shadowed: serverName !== undefined && managed.has(serverName),
         toolCount,
       });
     }
@@ -233,7 +300,7 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
       if (payload.enabled) {
         const config = source.options.config !== null && typeof source.options.config === 'object' ? source.options.config : {};
         const name = typeof config.serverName === 'string' ? config.serverName : undefined;
-        if (name !== undefined && store.list().some((server) => server.name === name)) {
+        if (name !== undefined && managedNames().has(name)) {
           throw new ManagerError('invalid', `"${name}" is managed on this page; enabling its dsh-mcp-client row would collide on tool names`, 'enabled');
         }
       }

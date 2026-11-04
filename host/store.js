@@ -13,6 +13,14 @@
  * Validation functions are the authoritative Host-side rules from
  * `mcp-manager/CONTRACT.md`; the Client mirrors them only for ergonomics.
  *
+ * Reads are cheap by construction: `list()` and `ui()` hand back one frozen
+ * snapshot that every reader shares until the next write publishes a new one,
+ * and `get(id)` resolves through an index, so a hot path never deep-copies the
+ * server list (credentials included) just to look at it. Callers that need to
+ * edit a record copy it first. Committed records also carry their connection
+ * fingerprint as a non-enumerable symbol property, so `JSON.stringify` and
+ * `structuredClone` never carry it onto the wire or into the document.
+ *
  * @module @kuhufu/dsh-mcp-manager/host/store
  */
 
@@ -307,6 +315,81 @@ function clone(value) {
 }
 
 /**
+ * Fields whose change requires a fresh connection and tool swap.
+ *
+ * The connection runtime compares this identity to decide whether a record
+ * still matches its live connection. It is computed once per committed record
+ * here, at the only point where the record becomes authoritative.
+ */
+const FINGERPRINT_FIELDS = Object.freeze([
+  'name',
+  'transport',
+  'command',
+  'args',
+  'env',
+  'cwd',
+  'url',
+  'headers',
+  'requestTimeoutMs',
+  'initializeTimeoutMs',
+]);
+
+/**
+ * Symbol key holding the fingerprint cached on a committed record.
+ *
+ * Symbol-keyed properties are never serialized by `JSON.stringify` and are
+ * dropped by `structuredClone`, so the cache can never reach the document on
+ * disk or leak into a caller's copy.
+ */
+export const CONNECTION_FINGERPRINT = Symbol('mcp-manager.connectionFingerprint');
+
+/**
+ * Connection identity of one record: the fields whose change forces a
+ * reconnect. Host-internal only; never persisted or sent to the Client.
+ *
+ * @param {object} server - persisted record (or an unsaved edit of one).
+ * @returns {string} stable identity string.
+ */
+export function connectionFingerprint(server) {
+  return JSON.stringify(FINGERPRINT_FIELDS.map((field) => server[field]));
+}
+
+/**
+ * Attach the cached fingerprint to one record before it is frozen.
+ * @param {object} record - committed server record.
+ * @returns {object} the same record.
+ */
+function stampFingerprint(record) {
+  Object.defineProperty(record, CONNECTION_FINGERPRINT, {
+    value: connectionFingerprint(record),
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return record;
+}
+
+/**
+ * Recursively freeze plain JSON data so one snapshot can be shared by every
+ * reader instead of being copied per caller.
+ * @template T
+ * @param {T} value - JSON value.
+ * @returns {T} the same value, frozen in place.
+ */
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  const stack = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    Object.freeze(current);
+    for (const entry of Object.values(current)) {
+      if (entry !== null && typeof entry === 'object' && !Object.isFrozen(entry)) stack.push(entry);
+    }
+  }
+  return value;
+}
+
+/**
  * Create the JSON document store.
  *
  * @param {{ file?: string, logger?: { warn?: (message: string) => void } }} [options]
@@ -314,10 +397,11 @@ function clone(value) {
  *   tolerant-read warnings.
  * @returns {{
  *   file: string,
- *   load: () => Promise<object[]>,
- *   list: () => object[],
+ *   load: () => Promise<readonly object[]>,
+ *   list: () => readonly object[],
+ *   get: (id: string) => object|undefined,
  *   ui: () => { railEntry: boolean },
- *   setServers: (servers: object[]) => Promise<object[]>,
+ *   setServers: (servers: object[]) => Promise<readonly object[]>,
  *   setUi: (ui: { railEntry: boolean }) => Promise<{ railEntry: boolean }>,
  *   flush: () => Promise<void>,
  * }} store handle.
@@ -325,10 +409,19 @@ function clone(value) {
 export function createStore(options = {}) {
   const file = options.file ?? resolveStoragePath();
   const logger = options.logger;
+  /** Authoritative in-memory records; replaced (never mutated) on every commit. */
   /** @type {object[]} */
   let servers = [];
   /** @type {{ railEntry: boolean }} */
   let ui = { railEntry: DEFAULT_UI.railEntry };
+  /** Frozen read-only view of `servers`, shared by every reader until the next commit. */
+  /** @type {readonly object[]|undefined} */
+  let snapshot;
+  /** Frozen read-only view of `ui`, shared by every reader until the next commit. */
+  /** @type {{ railEntry: boolean }|undefined} */
+  let uiSnapshot;
+  /** @type {Map<string, object>|undefined} */
+  let index;
   /** @type {Promise<object[]>|undefined} */
   let loading;
   let loaded = false;
@@ -368,12 +461,11 @@ export function createStore(options = {}) {
   }
 
   function load() {
-    if (loaded) return Promise.resolve(clone(servers));
+    if (loaded) return Promise.resolve(list());
     loading ??= (async () => {
       try {
         const document = parseDocument(await readFile(file, 'utf8'), true);
-        servers = document.servers;
-        ui = document.ui;
+        commit(document.servers, document.ui);
         skippedRecords = document.skipped;
       } catch (error) {
         if (error?.code !== 'ENOENT') {
@@ -386,13 +478,63 @@ export function createStore(options = {}) {
         hasBackup = true;
       } catch { hasBackup = false; }
       loaded = true;
-      return clone(servers);
+      return list();
     })();
-    return loading.then(clone);
+    return loading;
   }
 
-  function list() { return clone(servers); }
-  function getUi() { return clone(ui); }
+  /**
+   * Publish a new in-memory configuration and drop the derived read-only views.
+   * @param {object[]} nextServers - records to become authoritative.
+   * @param {{ railEntry: boolean }} nextUi - preference to become authoritative.
+   * @returns {void}
+   */
+  function commit(nextServers, nextUi) {
+    servers = nextServers;
+    ui = nextUi;
+    snapshot = undefined;
+    uiSnapshot = undefined;
+    index = undefined;
+  }
+
+  /**
+   * Frozen read-only view of the committed records.
+   *
+   * The clone is built once per commit and shared, so repeated reads during one
+   * agent sync (which used to deep-copy every record including credentials)
+   * become O(1). The view is frozen, so a caller can never corrupt it; copy
+   * before editing.
+   *
+   * @returns {readonly object[]} shared frozen snapshot.
+   */
+  function list() {
+    if (snapshot === undefined) {
+      const frozen = servers.map((record) => deepFreeze(stampFingerprint(record)));
+      snapshot = Object.freeze(frozen);
+      index = new Map(frozen.map((record) => [record.id, record]));
+    }
+    return snapshot;
+  }
+
+  /**
+   * Look one committed record up by id in O(1).
+   * @param {string} id - server id.
+   * @returns {object|undefined} frozen record, or undefined when absent.
+   */
+  function get(id) {
+    if (typeof id !== 'string' || id === '') return undefined;
+    list();
+    return index.get(id);
+  }
+
+  /**
+   * Frozen read-only copy of the page preference.
+   * @returns {{ railEntry: boolean }} shared frozen preference.
+   */
+  function getUi() {
+    uiSnapshot ??= deepFreeze(clone(ui));
+    return uiSnapshot;
+  }
   function status() {
     return { readOnly: storageError !== undefined, hasBackup,
       ...(skippedRecords ? { skippedRecords } : {}), ...(storageError ? { error: storageError } : {}) };
@@ -440,8 +582,7 @@ export function createStore(options = {}) {
       throw new ManagerError('internal', `could not persist MCP servers: ${error?.message ?? String(error)}`);
     }
     // Commit the in-memory state only after rename succeeds.
-    servers = clone(nextServers);
-    ui = clone(nextUi);
+    commit(clone(nextServers), clone(nextUi));
     storageError = undefined;
     skippedRecords = 0;
   }
@@ -454,10 +595,10 @@ export function createStore(options = {}) {
 
   function setServers(next) {
     if (!Array.isArray(next)) throw new ManagerError('internal', 'servers must be an array');
-    const snapshot = clone(next);
+    const candidate = clone(next);
     return enqueue(async () => {
       await load();
-      await persist(snapshot, ui);
+      await persist(candidate, ui);
       return list();
     });
   }
@@ -496,6 +637,7 @@ export function createStore(options = {}) {
     recover,
     load,
     list,
+    get,
     ui: getUi,
     setServers,
     setUi,
