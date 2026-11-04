@@ -5,9 +5,8 @@
  * Fetch routes: list, add/edit, enable, reconnect and delete servers, and show
  * each one's runtime status and the MCP tools it currently bridges.
  *
- * The factory is side-effect free and requires only `react`; styles render as
- * one React `<style>` element inside the root component, so unmounting the
- * section removes them.
+ * The factory is side-effect free and requires only `react`; the one stylesheet
+ * is injected when the plugin activates and removed when it unloads.
  */
 window.__ModuleLoader__.load({
   id: '@kuhufu/dsh-mcp-manager',
@@ -17,7 +16,7 @@ window.__ModuleLoader__.load({
 
     /** Dictionary namespace owned by this plugin. */
     const NS = 'settings.mcp-manager';
-    /** How often the mounted page refreshes server status. */
+    /** How often a still-settling server list refreshes (idle lists do not poll). */
     const POLL_MS = 5000;
     /** Relative Fetch routes; they resolve under both the Web server and the desktop carrier. */
     const ROUTES = {
@@ -188,6 +187,7 @@ window.__ModuleLoader__.load({
       errLoad: 'Could not load the server list.',
       railLabel: 'Show in the sidebar',
       railHint: 'Adds this page as a panel in the left rail; turning it off keeps Settings → MCP servers.',
+      viewTab: 'MCP',
       sessionTitle: 'MCP servers for this session',
       sessionHint: 'Only this session is affected; the saved configuration is unchanged.',
       sessionReset: 'Reset to the global configuration',
@@ -334,6 +334,7 @@ window.__ModuleLoader__.load({
       errLoad: '无法读取服务器列表。',
       railLabel: '在左侧栏显示入口',
       railHint: '把本页作为面板加入左侧栏；关闭后仍保留“设置 → MCP 服务器”。',
+      viewTab: 'MCP',
       sessionTitle: '本会话的 MCP 服务器',
       sessionHint: '只影响当前会话，不会改动已保存的配置。',
       sessionReset: '恢复全局配置',
@@ -859,8 +860,13 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** Rows for MCP servers still owned by other `dsh-mcp-client` entries; each can be migrated here. */
-    function ExternalList(props) {
+    /**
+     * Rows for MCP servers still owned by other `dsh-mcp-client` entries; each
+     * can be migrated here. Memoized: the page hands it a `useMemo` list whose
+     * entries already carry their own `busy` flag, so unrelated page state does
+     * not rebuild these rows.
+     */
+    const ExternalList = React.memo(function ExternalList(props) {
       const t = props.t;
       const [confirmId, setConfirmId] = React.useState(null);
       const [openId, setOpenId] = React.useState(null);
@@ -878,7 +884,7 @@ window.__ModuleLoader__.load({
             const summary = http
               ? item.url || ''
               : [item.command, ...(Array.isArray(item.args) ? item.args : [])].filter(Boolean).join(' ');
-            const busy = props.busyIds.has(item.entryId);
+            const busy = item.busy === true;
             const open = openId === item.entryId;
             const confirming = confirmId === item.entryId;
             return h(
@@ -1056,7 +1062,7 @@ window.__ModuleLoader__.load({
           }),
         ),
       );
-    }
+    });
 
     /** The inline delete confirmation, focused on its safe choice. */
     function ConfirmBar(props) {
@@ -1185,7 +1191,7 @@ window.__ModuleLoader__.load({
       const t = props.t;
       const server = props.server;
       const phase = phaseOf(server);
-      const busyHere = props.busyIds.has(server.id);
+      const busyHere = props.busy === true;
       const summary = transportSummary(server);
       const toolCount = typeof server.toolCount === 'number' ? server.toolCount : (server.tools || []).length;
       const detailsId = 'dshmcp-details-' + server.id;
@@ -1793,16 +1799,118 @@ window.__ModuleLoader__.load({
       };
     }
 
-    // Both mounted surfaces share mutation ordering and committed snapshots.
+    // ── shared page store ──────────────────────────────────────────────────
+    // Every mounted surface (the Settings section and the rail page) reads one
+    // snapshot and subscribes through `dataListeners`. Polling belongs to the
+    // store, not to a component, so the process keeps at most one timer and one
+    // copy of state no matter how many surfaces are mounted.
     const dataListeners = new Set();
+    /** Committed page snapshot shared by every surface. */
+    const managerData = {
+      servers: null,
+      external: [],
+      storage: { readOnly: false, hasBackup: false },
+      loadError: null,
+      railEntry: true,
+    };
+    /** Newest list read; a later read supersedes it. */
+    let activeRead = null;
+    /** One timer while any server can still settle on its own. */
+    let pollTimer = null;
     let dataGeneration = 0;
     let readSequence = 0;
     let appliedRead = 0;
     let pendingWrites = 0;
     let mutationTail = Promise.resolve();
 
+    /**
+     * Whether the Host may still move this server to another phase by itself.
+     * @param server - one row from the list payload.
+     * @returns whether a poll could observe a change.
+     */
+    function isSettling(server) {
+      return server.status === 'connecting' || server.status === 'starting';
+    }
+
+    /** Publish one committed snapshot to every mounted surface. */
+    function notifyData() {
+      for (const listener of [...dataListeners]) listener();
+    }
+
+    /**
+     * Whether any row can still settle without a local write.
+     * @returns whether a poll could observe a phase change.
+     */
+    function hasSettlingServers() {
+      return Array.isArray(managerData.servers) && managerData.servers.some(isSettling);
+    }
+
+    /**
+     * Start the store's single poll timer. It spans the subscribed lifetime so
+     * its phase stays stable, but each tick reads only while a row is settling:
+     * an idle list costs no request.
+     */
+    function startPolling() {
+      if (pollTimer !== null) return;
+      pollTimer = setInterval(() => {
+        if (hasSettlingServers()) pollData();
+      }, POLL_MS);
+    }
+
+    /** Stop the store's poll timer. */
+    function stopPolling() {
+      if (pollTimer === null) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    /**
+     * Apply one route payload to the shared snapshot.
+     * @param payload - a success payload from any route.
+     */
     function publishData(payload) {
-      for (const listener of dataListeners) listener(payload);
+      if (Array.isArray(payload.servers)) managerData.servers = payload.servers;
+      if (Array.isArray(payload.external)) managerData.external = payload.external;
+      if (payload.storage) managerData.storage = payload.storage;
+      if (payload.ui) {
+        const value = readRailEntry(payload);
+        managerData.railEntry = value;
+        railSurface?.observe(value);
+      }
+      managerData.loadError = null;
+      notifyData();
+    }
+
+    /**
+     * Read the list once. A newer read supersedes the previous one, and a
+     * response that loses to a mutation or to another read is dropped.
+     */
+    function readData() {
+      if (pendingWrites > 0) return;
+      activeRead?.abort();
+      const controller = new AbortController();
+      activeRead = controller;
+      const generation = dataGeneration;
+      const sequence = ++readSequence;
+      post(ROUTES.list, {}, controller.signal)
+        .then((payload) => {
+          if (controller.signal.aborted || generation !== dataGeneration || sequence < appliedRead) return;
+          appliedRead = sequence;
+          publishData(payload);
+        })
+        .catch((error) => {
+          if (controller.signal.aborted || generation !== dataGeneration || sequence < appliedRead) return;
+          managerData.loadError = error;
+          notifyData();
+        })
+        .finally(() => {
+          if (activeRead === controller) activeRead = null;
+        });
+    }
+
+    /** The timer's read never stacks on top of one already in flight. */
+    function pollData() {
+      if (activeRead === null) readData();
     }
 
     function mutateData(route, body) {
@@ -1836,61 +1944,41 @@ window.__ModuleLoader__.load({
       recover: (mode) => mutateData(ROUTES.recover, { mode }),
     };
 
-    /** Network lifetime and shared snapshots are kept outside page actions. */
+    /**
+     * Subscribe one surface to the shared page store.
+     * @param t - bound translator, used for the load-error voice.
+     * @returns the committed snapshot and the shared actions.
+     */
     function useManagerData(t) {
-      const [servers, setServers] = React.useState(null);
-      const [external, setExternal] = React.useState([]);
-      const [storage, setStorage] = React.useState({ readOnly: false, hasBackup: false });
-      const [loadError, setLoadError] = React.useState(null);
-      const [railEntry, setRailEntry] = React.useState(true);
+      const [, rerender] = React.useReducer((value) => value + 1, 0);
       const alive = React.useRef(true);
-      const activeRead = React.useRef(null);
-      const receive = React.useCallback((payload) => {
-        if (!alive.current) return;
-        if (Array.isArray(payload.servers)) setServers(payload.servers);
-        if (Array.isArray(payload.external)) setExternal(payload.external);
-        if (payload.storage) setStorage(payload.storage);
-        if (payload.ui) {
-          const value = readRailEntry(payload);
-          setRailEntry(value);
-          railSurface?.observe(value);
-        }
-        setLoadError(null);
-      }, []);
-      const requestList = React.useCallback(async (manual) => {
-        if (!alive.current || pendingWrites) return;
-        if (activeRead.current && !manual) return;
-        activeRead.current?.abort();
-        const controller = new AbortController();
-        activeRead.current = controller;
-        const generation = dataGeneration;
-        const sequence = ++readSequence;
-        try {
-          const payload = await post(ROUTES.list, {}, controller.signal);
-          if (controller.signal.aborted || !alive.current || generation !== dataGeneration || sequence < appliedRead) return;
-          appliedRead = sequence;
-          publishData(payload);
-        } catch (error) {
-          if (controller.signal.aborted || !alive.current || generation !== dataGeneration || sequence < appliedRead) return;
-          setLoadError({ text: t('errLoad'), detail: explain(error, t) });
-        } finally {
-          if (activeRead.current === controller) activeRead.current = null;
-        }
-      }, [t]);
       React.useEffect(() => {
         alive.current = true;
-        dataListeners.add(receive);
-        requestList(false);
-        const timer = setInterval(() => requestList(false), POLL_MS);
+        const listener = () => rerender();
+        dataListeners.add(listener);
+        startPolling();
+        readData();
         return () => {
           alive.current = false;
-          activeRead.current?.abort();
-          activeRead.current = null;
-          dataListeners.delete(receive);
-          clearInterval(timer);
+          dataListeners.delete(listener);
+          if (dataListeners.size > 0) return;
+          stopPolling();
+          activeRead?.abort();
+          activeRead = null;
         };
-      }, [receive, requestList]);
-      return { servers, external, storage, loadError, railEntry, alive, requestList, actions: managerActions };
+      }, []);
+      return {
+        servers: managerData.servers,
+        external: managerData.external,
+        storage: managerData.storage,
+        loadError: managerData.loadError === null
+          ? null
+          : { text: t('errLoad'), detail: explain(managerData.loadError, t) },
+        railEntry: managerData.railEntry,
+        alive,
+        requestList: readData,
+        actions: managerActions,
+      };
     }
 
     function StorageRecovery({ t, storage, actions }) {
@@ -1968,7 +2056,6 @@ window.__ModuleLoader__.load({
     // ── per-session `/mcp` panel ──────────────────────────────────────────
     /** Session whose panel is open, if any. */
     let panelSessionId = null;
-    let panelGeneration = 0;
     /** Components observing the open/closed state. */
     const panelSubscribers = new Set();
 
@@ -1978,14 +2065,12 @@ window.__ModuleLoader__.load({
      */
     function openSessionPanel(sessionId) {
       panelSessionId = sessionId;
-      panelGeneration += 1;
       for (const notify of [...panelSubscribers]) notify();
     }
 
     /** Close the panel and return focus to the composer. */
     function closeSessionPanel() {
       panelSessionId = null;
-      panelGeneration += 1;
       for (const notify of [...panelSubscribers]) notify();
     }
 
@@ -2005,33 +2090,8 @@ window.__ModuleLoader__.load({
       return panelSessionId === sessionId;
     }
 
-    /** Shared control primitives the panel reuses outside the settings page. */
-    const PANEL_PRIMITIVES = `
-.dshmcp-btn{box-sizing:border-box;height:36px;padding:0 14px;border-radius:var(--dsw-radius-md);border:.5px solid var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:14px;line-height:22px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;white-space:nowrap}
-.dshmcp-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
-.dshmcp-btn:focus-visible{box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline:none}
-.dshmcp-btn:disabled{opacity:.4;cursor:default}
-.dshmcp-btn-small{height:28px;padding:0 10px;font-size:12px;line-height:18px;border-radius:var(--dsw-radius-sm)}
-.dshmcp-icon-btn{box-sizing:border-box;width:28px;height:28px;padding:0;border-radius:var(--dsw-radius-sm);border:0;background:transparent;color:var(--dsw-alias-label-secondary);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
-.dshmcp-icon-btn:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-label-primary) 7%,transparent);color:var(--dsw-alias-label-primary)}
-.dshmcp-icon-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.dshmcp-icon-btn:disabled{opacity:.45;cursor:default}
-.dshmcp-switch{position:relative;box-sizing:border-box;width:36px;height:20px;padding:0;border-radius:999px;border:.5px solid var(--dsw-alias-border-l3);background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background .15s ease,border-color .15s ease}
-.dshmcp-switch::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transform:translateY(-50%);transition:left .15s ease}
-.dshmcp-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary);border-color:transparent}
-.dshmcp-switch[aria-checked=true]::after{left:18px}
-.dshmcp-switch[aria-busy=true]{cursor:progress}
-.dshmcp-switch[aria-busy=true]::after{opacity:.35}
-.dshmcp-switch:disabled{cursor:default;opacity:.5}
-.dshmcp-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
-.dshmcp-dot[data-state=ready]{background:var(--dsw-alias-state-success-primary)}
-.dshmcp-dot[data-state=connecting]{background:var(--dsw-alias-state-warn-primary)}
-.dshmcp-dot[data-state=error]{background:var(--dsw-alias-state-error-primary)}
-`;
-
-    /** Styles for the panel; mounted with it, so unmounting removes them. */
-    const PANEL_STYLE = PANEL_PRIMITIVES + `
+    /** Panel and View styles, shipped in the activation stylesheet (see {@link injectStyles}). */
+    const PANEL_STYLE = `
 .dshmcp-session-panel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:100;pointer-events:auto;box-sizing:border-box;max-height:60vh;overflow-y:auto;border-radius:var(--dsw-radius-lg);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent);padding:12px;display:flex;flex-direction:column;gap:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}
 .dshmcp-session-head{display:flex;align-items:flex-start;gap:8px}
 .dshmcp-session-titles{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
@@ -2046,6 +2106,16 @@ window.__ModuleLoader__.load({
 .dshmcp-session-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px}
 .dshmcp-session-badge{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;white-space:nowrap}
 .dshmcp-session-foot{display:flex;justify-content:flex-end;padding-top:4px}
+.dshmcp-session-panel .dshmcp-switch:disabled{opacity:.5}
+.dshmcp-session-page{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow-y:auto;padding:24px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}
+.dshmcp-session-wrap{display:flex;flex-direction:column;gap:12px;max-width:760px;margin:0 auto}
+.dshmcp-session-glyph{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);flex:none}
+.dshmcp-session-page .dshmcp-session-head{align-items:center}
+.dshmcp-session-page .dshmcp-session-title{font-size:16px;line-height:24px}
+.dshmcp-session-page .dshmcp-session-list{max-height:none;overflow:visible}
+.dshmcp-session-page .dshmcp-session-row{min-height:38px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform)}
+.dshmcp-session-page .dshmcp-session-section{padding-top:16px;margin-top:4px}
+.dshmcp-session-page .dshmcp-session-foot{padding-top:8px}
 `;
 
     /**
@@ -2088,117 +2158,102 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The `/mcp` panel: one Session's MCP visibility, toggled in place.
-     * @param props - slot props; `sessionId` comes from the slot's `inject` hook.
-     * @returns the panel, or null while closed.
+     * Fetch and mutate one Session's MCP visibility for either surface.
+     *
+     * The effect is keyed by visibility and identity only: hiding the surface or
+     * switching Sessions invalidates the previous read through the effect
+     * cleanup, so no separate generation term is needed.
+     * @param sessionId - the Session to read, or undefined without one.
+     * @param active - whether the owning surface is visible.
+     * @param t - translator for failure copy.
+     * @returns the committed payload, its failure, the pending control id and writes.
      */
-    function McpSessionPanel(props) {
-      const t = React.useMemo(
-        () => (typeof props.t === 'function' ? props.t : directTranslator()),
-        [props.t],
-      );
-      // Some shells do not pass `inject:` props to slot entries; the action that
-      // opened the panel already recorded the Session, so fall back to it.
-      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : panelSessionId;
-      const open = usePanelOpen(sessionId);
-      const generation = panelGeneration;
+    function useSessionData(sessionId, active, t) {
       const [snapshot, setSnapshot] = React.useState(null);
-      const state = snapshot?.sessionId === sessionId && snapshot?.generation === generation ? snapshot.payload : null;
       const [failure, setFailure] = React.useState(null);
       const [busy, setBusy] = React.useState(null);
       const requestGeneration = React.useRef(0);
+      const pendingMutation = React.useRef(null);
+      const alive = React.useRef(true);
       // Slots may hand a fresh `t` each render; keeping it in a ref stops that
       // from re-running the fetch effect (a request per parent render).
       const translate = React.useRef(t);
       translate.current = t;
-      const pendingMutation = React.useRef(null);
-      const isCurrent = (request) => requestGeneration.current === request
-        && panelSessionId === sessionId && panelGeneration === generation;
-      const accept = (payload) => setSnapshot({ sessionId, generation, payload });
-
+      React.useEffect(() => {
+        alive.current = true;
+        return () => {
+          alive.current = false;
+          requestGeneration.current += 1;
+        };
+      }, []);
       React.useEffect(() => {
         const request = ++requestGeneration.current;
         pendingMutation.current = null;
         setSnapshot(null);
         setBusy(null);
         setFailure(null);
-        if (open && typeof sessionId === 'string') {
+        if (active && typeof sessionId === 'string') {
           post(ROUTES.session, { sessionId })
             .then((payload) => {
-              if (isCurrent(request)) accept(payload);
+              if (alive.current && requestGeneration.current === request) setSnapshot(payload);
             })
             .catch((error) => {
-              if (isCurrent(request)) setFailure(explain(error, translate.current));
+              if (alive.current && requestGeneration.current === request) setFailure(explain(error, translate.current));
             });
         }
-        return () => { requestGeneration.current += 1; };
-      }, [open, sessionId, generation]);
-
-      React.useEffect(() => {
-        if (!open) return undefined;
-        const onKeyDown = (event) => {
-          if (event.key !== 'Escape') return;
-          event.preventDefault();
-          event.stopPropagation();
-          closeSessionPanel();
+        return () => {
+          requestGeneration.current += 1;
         };
-        window.addEventListener('keydown', onKeyDown, true);
-        return () => window.removeEventListener('keydown', onKeyDown, true);
-      }, [open]);
+      }, [active, sessionId]);
 
-      if (!open || typeof sessionId !== 'string') return null;
-
+      const state = snapshot !== null && snapshot.sessionId === sessionId ? snapshot : null;
       const mutate = (key, body) => {
-        if (pendingMutation.current !== null || state === null
-          || panelSessionId !== sessionId || panelGeneration !== generation) return;
+        if (pendingMutation.current !== null || state === null || !active) return;
         const request = ++requestGeneration.current;
         pendingMutation.current = request;
         setBusy(key);
         post(ROUTES.sessionSet, { sessionId, ...body })
           .then((payload) => {
-            if (!isCurrent(request)) return;
-            accept(payload);
+            if (!alive.current || requestGeneration.current !== request) return;
+            setSnapshot(payload);
             setFailure(null);
           })
           .catch((error) => {
-            if (isCurrent(request)) setFailure(explain(error, t));
+            if (!alive.current || requestGeneration.current !== request) return;
+            setFailure(explain(error, translate.current));
           })
           .finally(() => {
-            if (!isCurrent(request)) return;
+            if (!alive.current || requestGeneration.current !== request) return;
             pendingMutation.current = null;
             setBusy(null);
           });
       };
-      const toggle = (server) => mutate(server.id, { serverId: server.id, enabled: !server.visible });
-      const toggleExternal = (item) => mutate(item.entryId, { entryId: item.entryId, enabled: !item.visible });
-      const reset = () => mutate('reset', { reset: true });
 
+      return {
+        state,
+        failure,
+        busy,
+        toggle: (server) => mutate(server.id, { serverId: server.id, enabled: !server.visible }),
+        toggleExternal: (item) => mutate(item.entryId, { entryId: item.entryId, enabled: !item.visible }),
+        reset: () => mutate('reset', { reset: true }),
+      };
+    }
+
+    /**
+     * Rows shared by the overlay panel and the View: managed servers, external
+     * entries and the reset action all read the same session payload. This is a
+     * plain tree builder rather than a component, so both surfaces keep the
+     * controls at their own level (one tree, two wraps).
+     * @param props - `t`, the payload, its failure, the pending control and writes.
+     */
+    function sessionBody(props) {
+      const t = props.t;
+      const state = props.state;
+      const busy = props.busy;
       return h(
-        'div',
-        { className: 'dshmcp-session-panel', role: 'dialog', 'aria-label': t('sessionTitle') },
-        h('style', null, PANEL_STYLE),
-        h(
-          'div',
-          { className: 'dshmcp-session-head' },
-          h(
-            'div',
-            { className: 'dshmcp-session-titles' },
-            h('h3', { className: 'dshmcp-session-title' }, t('sessionTitle')),
-            h('p', { className: 'dshmcp-session-hint' }, t('sessionHint')),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dshmcp-icon-btn',
-              'aria-label': t('closeDialog'),
-              title: t('closeDialog'),
-              onClick: closeSessionPanel,
-            },
-            h(Icon, { name: 'close' }),
-          ),
-        ),
-        failure === null ? null : h('p', { className: 'dshmcp-session-error', role: 'alert' }, failure),
+        React.Fragment,
+        null,
+        props.failure === null ? null : h('p', { className: 'dshmcp-session-error', role: 'alert' }, props.failure),
         state === null
           ? h('p', { className: 'dshmcp-session-hint' }, t('sessionLoading'))
           : state.servers.length === 0
@@ -2218,7 +2273,7 @@ window.__ModuleLoader__.load({
                       busy: busy === server.id,
                       disabled: busy !== null && busy !== server.id,
                       label: t('sessionToggle', { name: server.name }),
-                      onChange: () => toggle(server),
+                      onChange: () => props.onToggle(server),
                     }),
                   ),
                 ),
@@ -2246,7 +2301,7 @@ window.__ModuleLoader__.load({
                       busy: busy === item.entryId,
                       disabled: busy !== null,
                       label: t('sessionHideExternal', { name: item.serverName || item.entryId }),
-                      onChange: () => toggleExternal(item),
+                      onChange: () => props.onToggleExternal(item),
                     }),
                   ),
                 ),
@@ -2261,7 +2316,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dshmcp-btn dshmcp-btn-small',
-              onClick: reset,
+              onClick: props.onReset,
               disabled: busy !== null || state === null,
             },
             t('sessionReset'),
@@ -2270,11 +2325,110 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * The `/mcp` overlay: the same session body in a floating card above the
+     * composer. The header entry and the bare `/mcp` command open it.
+     * @param props - slot props; `sessionId` comes from the slot's `inject` hook.
+     * @returns the panel, or null while closed.
+     */
+    function McpSessionPanel(props) {
+      const t = React.useMemo(
+        () => (typeof props.t === 'function' ? props.t : directTranslator()),
+        [props.t],
+      );
+      // Some shells do not pass `inject:` props to slot entries; the action that
+      // opened the panel already recorded the Session, so fall back to it.
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : panelSessionId;
+      const open = usePanelOpen(sessionId);
+      const { state, failure, busy, toggle, toggleExternal, reset } = useSessionData(sessionId, open, t);
+
+      React.useEffect(() => {
+        if (!open) return undefined;
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeSessionPanel();
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+      }, [open]);
+
+      if (!open || typeof sessionId !== 'string') return null;
+
+      return h(
+        'div',
+        { className: 'dshmcp-session-panel', role: 'dialog', 'aria-label': t('sessionTitle') },
+        h(
+          'div',
+          { className: 'dshmcp-session-head' },
+          h(
+            'div',
+            { className: 'dshmcp-session-titles' },
+            h('h3', { className: 'dshmcp-session-title' }, t('sessionTitle')),
+            h('p', { className: 'dshmcp-session-hint' }, t('sessionHint')),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshmcp-icon-btn',
+              'aria-label': t('closeDialog'),
+              title: t('closeDialog'),
+              onClick: closeSessionPanel,
+            },
+            h(Icon, { name: 'close' }),
+          ),
+        ),
+        sessionBody({ t, state, failure, busy, onToggle: toggle, onToggleExternal: toggleExternal, onReset: reset }),
+      );
+    }
+
+    /**
+     * The whole-page Conversation View: the same session body laid out as a
+     * first-class page beside Chat and Trajectory.
+     * @param props - View slot props; `sessionId` comes from the slot's `inject` hook.
+     * @returns the page, or null without a Session.
+     */
+    function McpSessionView(props) {
+      const t = React.useMemo(
+        () => (typeof props.t === 'function' ? props.t : directTranslator()),
+        [props.t],
+      );
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : undefined;
+      const { state, failure, busy, toggle, toggleExternal, reset } = useSessionData(
+        sessionId,
+        typeof sessionId === 'string',
+        t,
+      );
+      if (typeof sessionId !== 'string') return null;
+      return h(
+        'div',
+        { className: 'dshmcp-session-page', role: 'region', 'aria-label': t('sessionTitle') },
+        h(
+          'div',
+          { className: 'dshmcp-session-wrap' },
+          h(
+            'div',
+            { className: 'dshmcp-session-head' },
+            h('span', { className: 'dshmcp-session-glyph', 'aria-hidden': 'true' }, h(Icon, { name: 'server', size: 18 })),
+            h(
+              'div',
+              { className: 'dshmcp-session-titles' },
+              h('h2', { className: 'dshmcp-session-title' }, t('sessionTitle')),
+              h('p', { className: 'dshmcp-session-hint' }, t('sessionHint')),
+            ),
+          ),
+          sessionBody({ t, state, failure, busy, onToggle: toggle, onToggleExternal: toggleExternal, onReset: reset }),
+        ),
+      );
+    }
+
     // ── the section ───────────────────────────────────────────────────────
     /**
      * Render the MCP servers settings page.
      * @param props - slot props; `t` is bound to this plugin's namespace.
-     * @returns the section, its styles and any open dialog.
+     * @returns the section and any open dialog.
      */
     function McpManagerSection(props) {
       const t = React.useMemo(
@@ -2283,7 +2437,7 @@ window.__ModuleLoader__.load({
       );
       const { servers, external, storage, loadError, railEntry, alive, requestList, actions } = useManagerData(t);
       const [notice, setNotice] = React.useState(null);
-      const [busyIds, setBusyIds] = React.useState(() => new Set());
+      const [busyVersion, setBusyVersion] = React.useState(0);
       const activeActions = React.useRef(new Set());
       const [confirmId, setConfirmId] = React.useState(null);
       const [expanded, setExpanded] = React.useState({});
@@ -2305,10 +2459,12 @@ window.__ModuleLoader__.load({
         previousConfirm.current = confirmId;
       }, [confirmId]);
 
-      const run = async (id, task) => {
+      // Busy ids live in a ref; the counter re-renders the rows that read it.
+      const bumpBusy = () => setBusyVersion((value) => value + 1);
+      const run = React.useCallback(async (id, task) => {
         if (activeActions.current.has(id)) return;
         activeActions.current.add(id);
-        setBusyIds(new Set(activeActions.current));
+        bumpBusy();
         try {
           await task();
         } catch (error) {
@@ -2318,9 +2474,9 @@ window.__ModuleLoader__.load({
           if (error instanceof ApiError && error.code === 'not-found') requestList(true);
         } finally {
           activeActions.current.delete(id);
-          if (alive.current) setBusyIds(new Set(activeActions.current));
+          if (alive.current) bumpBusy();
         }
-      };
+      }, [t]);
 
       const toggleServer = (server) =>
         run(server.id, async () => {
@@ -2332,20 +2488,22 @@ window.__ModuleLoader__.load({
           await actions.reconnect(server.id);
         });
 
-      const takeoverServer = (item) =>
+      // Stable identities: `ExternalList` is memoized and must skip a page
+      // render that only changed unrelated state.
+      const takeoverServer = React.useCallback((item) =>
         run(item.entryId, async () => {
           await actions.takeover(item.entryId);
-        });
+        }), [run]);
 
-      const setExternalDefault = (item, autoInject) =>
+      const setExternalDefault = React.useCallback((item, autoInject) =>
         run(item.entryId, async () => {
           await actions.setExternalDefault(item.entryId, autoInject);
-        });
+        }), [run]);
 
-      const toggleExternal = (item) =>
+      const toggleExternal = React.useCallback((item) =>
         run(item.entryId, async () => {
           await actions.toggleExternal(item.entryId, !item.enabled);
-        });
+        }), [run]);
 
       const setRailPreference = (next) => {
         if (railBusy) return;
@@ -2406,10 +2564,20 @@ window.__ModuleLoader__.load({
 
       const loading = servers === null && loadError === null;
       const allRows = servers || [];
-      const matches = (server) => (filter === 'all' || phaseOf(server) === filter)
-        && `${server.name ?? server.serverName ?? ''} ${transportSummary(server)}`.toLowerCase().includes(query.toLowerCase());
-      const rows = allRows.filter(matches);
-      const foreign = external.filter((item) => matches({ ...item, status: item.enabled ? 'ready' : 'stopped' }));
+      const needle = query.toLowerCase();
+      const matchesServer = (server) => (filter === 'all' || phaseOf(server) === filter)
+        && `${server.name ?? server.serverName ?? ''} ${transportSummary(server)}`.toLowerCase().includes(needle);
+      const rows = allRows.filter(matchesServer);
+      // One stable array for the memoized `ExternalList`: each entry carries its
+      // own busy flag, so it only changes when the rows, the filters or a pending
+      // write change — not on every page render.
+      const foreign = React.useMemo(
+        () => external
+          .filter((item) => (filter === 'all' || (item.enabled ? 'ready' : 'disabled') === filter)
+            && `${item.serverName ?? ''} ${transportSummary(item)}`.toLowerCase().includes(needle))
+          .map((item) => ({ ...item, busy: activeActions.current.has(item.entryId) })),
+        [external, filter, needle, busyVersion],
+      );
       const copyServer = (server) => {
         let suffix = 1;
         let name;
@@ -2423,7 +2591,6 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dshmcp-section' },
-        h('style', null, STYLE_TEXT),
         h(
           'div',
           { className: 'dshmcp-head' },
@@ -2465,7 +2632,7 @@ window.__ModuleLoader__.load({
                         key: server.id,
                         t,
                         server,
-                        busyIds,
+                        busy: activeActions.current.has(server.id),
                         expanded: Boolean(expanded[server.id]),
                         confirming: confirmId === server.id,
                         onToggleExpand: () => toggleExpanded(server.id),
@@ -2484,7 +2651,7 @@ window.__ModuleLoader__.load({
                 ),
         foreign.length === 0
           ? null
-          : h(ExternalList, { t, items: foreign, busyIds, onTakeover: takeoverServer, onToggle: toggleExternal, onDefaultInject: setExternalDefault }),
+          : h(ExternalList, { t, items: foreign, onTakeover: takeoverServer, onToggle: toggleExternal, onDefaultInject: setExternalDefault }),
         ),
         h(ConfigTransfer, { t, readOnly: storage.readOnly, actions }),
         h('div', { inert: storage.readOnly ? '' : undefined }, h(RailPreferenceRow, {
@@ -2510,9 +2677,10 @@ window.__ModuleLoader__.load({
 
     // ── styles ────────────────────────────────────────────────────────────
     /**
-     * The page's stylesheet, rendered as a React element inside the section.
-     * Only the contracted `--dsw-alias-*` tokens carry colour; `color-mix`
-     * derives tints and veils so the page follows light and dark themes.
+     * The page's stylesheet, injected once by the activation effect (see
+     * {@link injectStyles}). Only the contracted `--dsw-alias-*` tokens carry
+     * colour; `color-mix` derives tints and veils so the page follows light and
+     * dark themes.
      */
     const STYLE_TEXT = `
 .dshmcp-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}
@@ -2683,12 +2851,30 @@ window.__ModuleLoader__.load({
     const inject = ['slots', 'locale'];
 
     /**
+     * Inject this plugin's single stylesheet. Activation owns it through
+     * `ctx.effect`, so opening and closing the panel never inserts or removes a
+     * `<style>` element — each such change forced a whole-document restyle.
+     * @returns the disposer that removes the injected element.
+     */
+    function injectStyles() {
+      if (typeof document === 'undefined' || !document.head) return undefined;
+      const style = document.createElement('style');
+      style.setAttribute('data-dshmcp', '');
+      style.textContent = STYLE_TEXT + PANEL_STYLE;
+      document.head.appendChild(style);
+      return () => {
+        style.remove();
+      };
+    }
+
+    /**
      * Mount the MCP servers settings section.
      * @param ctx - the browser plugin context.
      */
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'mcp-manager: section dictionaries');
+      ctx.effect(() => injectStyles(), 'mcp-manager: stylesheet');
       // `/mcp`: the host command carries the argument form; this decoration adds
       // the bare-invocation panel, which is client-owned and never submitted.
       // `ctx.inject` callbacks may run again when dependencies change; the
@@ -2721,6 +2907,21 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: (sessionId) => ({ sessionId }),
       }, McpHeaderEntry));
+      // `MCP` is a first-class Session View beside Chat and Trajectory. The View
+      // contract carries id/label/order for the tab (tab labels are text-only, so
+      // the server glyph lives in the page header) and needs no target snapshot
+      // here: MCP has no Conversation event stream, and its data comes from
+      // `POST api/mcp-manager.session`. A shell without the injectable View slot
+      // never runs this callback; a More-menu row is not a substitute, because
+      // that menu only selects Views that are already registered.
+      ctx.slots.inject('conversation.view', () => ctx.slots.register({
+        name: 'conversation.view',
+        id: 'mcp',
+        order: 20,
+        locale: NS,
+        label: () => t('viewTab'),
+        inject: (sessionId) => ({ sessionId }),
+      }, McpSessionView));
       // The panel lives in the composer overlay so it tracks the active Session.
       ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
         name: 'conversation.input.overlay',
