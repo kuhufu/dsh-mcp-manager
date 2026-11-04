@@ -11,7 +11,9 @@ Both halves are plain JavaScript (no build step). The Client half is a browser b
 
 - `index.js`: plugin activation and route registration.
 - `host/manager.js`: serialized configuration operations and store ownership.
-- `host/runtime.js`: connections, bounded retries, tool registrations and activity.
+- `host/runtime.js`: connections, bounded retries, tool definitions and activity.
+- `host/agents.js`: per-agent tool registration and `/mcp` visibility sync.
+- `host/session-state.js`: persisted per-session visibility overrides.
 - `host/external.js`: Loader entry enablement and migration.
 - `host/profile-patch.js`: targeted profile-patch repair with a backup.
 - `host/errors.js`: shared Host diagnostic formatting.
@@ -101,6 +103,9 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.export` | `{ includeSecrets?: boolean }` | `{ ok: true, document: { version: 1, servers: ServerInput[] } }` |
 | `/api/mcp-manager.recover` | `{ mode: "backup" | "reset" }` | `{ ok: true, servers: ServerView[], archive?: string }` |
 | `/api/mcp-manager.tool` | `{ id, name: string, enabled: boolean }` | `{ ok: true, servers: ServerView[] }` |
+| `/api/mcp-manager.session` | `{ sessionId }` | `{ ok: true, sessionId, overrides, servers: SessionServerView[] }` |
+| `/api/mcp-manager.session-set` | `{ sessionId, serverId, enabled: boolean \| null }` | `{ ok: true, sessionId, overrides, servers: SessionServerView[] }` |
+| `/api/mcp-manager.session-set` | `{ sessionId, reset: true }` | Same session payload; atomically clears both managed and external overrides |
 
 Every success response includes `storage: { readOnly: boolean, hasBackup: boolean, error?: string, skippedRecords?: number }`.
 `storage-readonly` is a stable failure code for attempts to overwrite a damaged document.
@@ -179,6 +184,33 @@ Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 - Saving an existing `id` replaces the record and reconciles the connection in place
   (restart if the connection-relevant fields changed).
 - A failed connection never deletes the record: it shows `status: "error"` with `error`.
+
+## Per-session visibility (`/mcp`)
+
+A Session may hide or show individual servers for itself without touching the persisted
+configuration:
+
+- Overrides persist in `<DSH_HOME>/storages/mcp-manager-sessions.json` as
+  `{ version: 1, sessions: { [sessionId]: { overrides: { [serverId]: boolean }, external: { [entryId]: boolean }, updatedAt } } }`;
+  an absent entry follows the server's own `enabled` flag.
+- Tools are registered on `agent.ctx` (the documented per-agent composition scope) from an
+  `agent/created` listener and released on `agent/disposed`; hiding a server therefore removes
+  its tools from that Session's Agent only. Unloading the plugin releases every registration.
+- A server stays connected while any Session explicitly shows it, so `/mcp on` can reveal a
+  globally disabled server without enabling it for everyone.
+- `session` / `session-set` are the panel's routes; `SessionServerView` is
+  `{ id, name, enabled, status, toolCount, visible }`, and the same payload carries
+  `external: { entryId, serverName, enabled, toolCount, visible }[]`.
+- External `dsh-mcp-client` entries register their tools globally, so hiding one for a Session is
+  `agent.ctx.tools.restrict({ deny: [...] })` over that entry's `mcp__<server>__*` names in the
+  unfiltered Host catalog (the documented agent-scoped deny mask). Migrated entries whose
+  namespace is managed here are excluded. The mask is re-applied on `tools/change`; an entry
+  disabled in the profile has no tools to hide, so it can only be enabled there.
+- The Host registers the `mcp` command (`list`, `on <server>`, `off <server>`, `reset`); the Web
+  client decorates that name with a bare-invocation panel in `conversation.input.overlay`.
+- Command and panel reset both clear the Session's managed and external overrides in one
+  persisted operation. Failed writes preserve the previous in-memory state. Panel responses
+  apply only to the Session and opening/request generation that issued them.
 
 ## Tool bridging (Host)
 

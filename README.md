@@ -20,13 +20,19 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
   working directory.
 - **Live status**: connected / connecting / failed (with the server's error text), tool count,
   server version, instructions, and the discovered tool list.
+- **`/mcp` per-session switches.** Type `/mcp` in the composer for a panel that hides or shows
+  each server for the current session only; `/mcp on <server>`, `/mcp off <server>`,
+  `/mcp list` and `/mcp reset` do the same from the command line. Overrides persist per session
+  and never change the saved configuration. `dsh-mcp-client` entries appear in the same panel;
+  hiding one applies an agent-scoped `ctx.tools.restrict()` deny mask, so their globally
+  registered tools disappear for that session only.
 - **Foreign entries are visible, not duplicated.** MCP servers already configured as separate
   `@deepseek-ai/dsh-mcp-client` rows appear with their Entry id and live tool count, and can be
   switched on or off from this page without touching their configuration.
   **Migrate here** moves one over: it disables the source row first, then copies the config into
   this page and connects — so two connections never compete for the same tool names.
 - **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
-  atomic JSON persistence, and twelve exact Fetch routes. No build step.
+  atomic JSON persistence, and fourteen exact Fetch routes. No build step.
 
 ## Screenshots
 
@@ -124,7 +130,8 @@ the whole tool set atomically.
 
 ## Data and security
 
-- Records live in `$DSH_HOME/storages/mcp-manager.json` (`$DSH_HOME` defaults to `~/.dsh`),
+- Records live in `$DSH_HOME/storages/mcp-manager.json` (`$DSH_HOME` defaults to `~/.dsh`);
+  per-session `/mcp` overrides live in `storages/mcp-manager-sessions.json` beside it,
   written atomically with `0600` permissions. Memory is committed only after persistence succeeds.
   The previous valid document is retained in `.bak`.
 - Corrupt, unreadable, or unsupported-version documents lock writes and offer backup restoration
@@ -154,6 +161,7 @@ All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
 | `takeover` | Disable a `dsh-mcp-client` entry and re-create it as a managed record |
 | `toggle-external` | Enable or disable a `dsh-mcp-client` entry |
 | `ui` | The `railEntry` preference |
+| `session` / `session-set` | A session's visibility overrides (`/mcp`) |
 | `import` / `export` | Atomic batch import and credential-optional export |
 | `recover` | Archive the original and restore a backup or reset |
 | `tool` | Enable or disable a raw tool name |

@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `/mcp` per-session switches: a composer panel plus `list`/`on`/`off`/`reset` command forms.
+  Tools are registered on `agent.ctx`, so one Session can hide a server without changing the
+  saved configuration or any other Session; overrides persist in
+  `storages/mcp-manager-sessions.json`.
 - Configurable handshake/tool deadlines, bounded exponential reconnect, and recent activity.
 - Public tool names, per-tool enablement, and dynamic tool-catalog notifications.
 - Atomic JSON batch import (disabled by default), credential-optional export, copy, search,

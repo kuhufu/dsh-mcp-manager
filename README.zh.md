@@ -15,6 +15,10 @@
 - **界面里完成全部操作**：添加、编辑、启用/停用、重连、删除。保存即连接；停用会结束子进程并
   撤掉该服务器的工具；重连重新握手并原子替换工具集。
 - **两种传输**：stdio（命令、参数、环境变量、工作目录）与 Streamable HTTP（URL、请求头）。
+- **按会话开关 `/mcp`**：在输入框输入 `/mcp` 打开面板，只对当前会话隐藏或显示某个服务器；
+  `/mcp on <服务器>`、`/mcp off <服务器>`、`/mcp list`、`/mcp reset` 提供等价的命令形式。
+  覆盖项按会话持久化，不会改动已保存的配置。`dsh-mcp-client` 条目也会出现在面板里：
+  隐藏它们会在该 agent 上应用 `ctx.tools.restrict()` 的 deny 掩码，全局注册的工具只对当前会话消失。
 - **实时状态**：已连接 / 连接中 / 失败（带服务器报错原文）、工具数、服务器版本、instructions、
   可展开的工具清单。
 - **外部条目可见、可开关、不重复连接**：已经在 `@deepseek-ai/dsh-mcp-client` 独立条目里配置的
@@ -26,7 +30,7 @@
 - **工具管理**：显示实际注册名称，支持逐个启停；收到工具列表变化通知后自动刷新，保留停用选择。
 - **配置整理**：搜索、状态筛选、复制服务器，以及 JSON 批量导入导出。
 - **零依赖**：自带一个小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和
-  十二条精确 Fetch 路由，无构建步骤。
+  十四条精确 Fetch 路由，无构建步骤。
 
 ## 截图
 
@@ -115,7 +119,8 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 
 ## 数据与安全
 
-- 配置存放在 `$DSH_HOME/storages/mcp-manager.json`（`$DSH_HOME` 默认 `~/.dsh`），原子写入，
+- 配置存放在 `$DSH_HOME/storages/mcp-manager.json`（`$DSH_HOME` 默认 `~/.dsh`）；按会话的
+  `/mcp` 覆盖项存放在同目录的 `mcp-manager-sessions.json`，原子写入，
   读取时校验。写入成功后才更新内存，文件权限为 `0600`；上一次有效配置保存在同目录 `.bak` 文件。
 - 文件损坏、无法读取或版本不支持时，页面进入只读恢复状态，阻止覆盖原配置。可选择恢复备份或使用空配置，
   操作前均会把原文件归档为 `.recovery-<时间戳>-<uuid>`。旧版缺少 `version` 或 `ui` 的文档仍可读取并升级。
