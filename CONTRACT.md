@@ -208,6 +208,11 @@ configuration:
   disabled in the profile has no tools to hide, so it can only be enabled there.
 - The Host registers the `mcp` command (`list`, `on <server>`, `off <server>`, `reset`); the Web
   client decorates that name with a bare-invocation panel in `conversation.input.overlay`.
+- The panel also ships as a Session View: `ctx.slots.register({ name: 'conversation.view',
+  id: 'mcp' })` puts an "MCP" tab beside Chat and Trajectory and renders the same rows as a
+  full page. No Conversation target is registered; the View reads `api/mcp-manager.session`.
+- Client data is a module-level snapshot behind `dataListeners`; one process-wide timer polls
+  only while a server is connecting, and the stylesheet is injected once from `apply()`.
 - Command and panel reset both clear the Session's managed and external overrides in one
   persisted operation. Failed writes preserve the previous in-memory state. Panel responses
   apply only to the Session and opening/request generation that issued them.

@@ -23,7 +23,8 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
 - **`/mcp` per-session switches.** Type `/mcp` in the composer for a panel that hides or shows
   each server for the current session only; `/mcp on <server>`, `/mcp off <server>`,
   `/mcp list` and `/mcp reset` do the same from the command line. Overrides persist per session
-  and never change the saved configuration. `dsh-mcp-client` entries appear in the same panel;
+  and never change the saved configuration. The same panel is available as an **MCP** tab next
+  to Chat and Trajectory. `dsh-mcp-client` entries appear in the same panel;
   hiding one applies an agent-scoped `ctx.tools.restrict()` deny mask, so their globally
   registered tools disappear for that session only.
 - **Foreign entries are visible, not duplicated.** MCP servers already configured as separate

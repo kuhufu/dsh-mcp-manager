@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- Per-Session MCP visibility: the `/mcp` panel, an "MCP" View tab beside Chat and
+  Trajectory, and `autoInject` defaults for tool-heavy servers.
+
 ### Fixed
 
 - Commit in-memory configuration only after successful persistence; retain a previous-good
