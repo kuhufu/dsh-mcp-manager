@@ -87,6 +87,8 @@ const pluginManager = {
 
 const routes = new Map();
 const cleanups = [];
+/** Event listeners the plugin registers (agent lifecycle). */
+const listeners = new Map();
 
 const ctx = {
   logger: { info() {}, warn() {}, error() {} },
@@ -104,6 +106,15 @@ const ctx = {
     if (typeof disposer === 'function') cleanups.push(disposer);
     return () => {};
   },
+  on(event, listener) {
+    const list = listeners.get(event) ?? [];
+    list.push(listener);
+    listeners.set(event, list);
+    return () => {
+      const index = list.indexOf(listener);
+      if (index >= 0) list.splice(index, 1);
+    };
+  },
   get: (name) => {
     if (name === 'loader') return loader;
     if (name === 'pluginManager') return pluginManager;
@@ -112,6 +123,12 @@ const ctx = {
 };
 
 apply(ctx);
+const fakeAgent = {
+  id: 'agent-race',
+  session: { id: 'session-race' },
+  ctx: { tools, effect: (body) => body() },
+};
+for (const listener of [...(listeners.get('agent/created') ?? [])]) listener({ agent: fakeAgent });
 
 const call = async (routePath, body) => {
   const route = routes.get(routePath);

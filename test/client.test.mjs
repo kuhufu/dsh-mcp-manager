@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { CONNECTION_OPTIONS } from '../host/store.js';
 const source = (await readFile(new URL('../client.js', import.meta.url), 'utf8')).replace(
   'return { NS, inject, apply };',
-  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, CONNECTION_OPTIONS };',
+  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, CONNECTION_OPTIONS, McpSessionPanel, openSessionPanel, closeSessionPanel };',
 );
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -20,6 +20,7 @@ function fixture() {
       return [owner.hooks[index], (value) => { owner.hooks[index] = typeof value === 'function' ? value(owner.hooks[index]) : value; }];
     },
     useRef(initial) { const [value] = this.useState(() => ({ current: initial })); return value; },
+    useReducer(reducer, initial) { const [value, set] = this.useState(initial); return [value, (action) => set((previous) => reducer(previous, action))]; },
     useMemo(fn, deps) {
       const owner = current, index = owner.cursor++, old = owner.hooks[index];
       if (!old || !deps || deps.some((value, i) => !Object.is(value, old.deps[i]))) owner.hooks[index] = { value: fn(), deps };
@@ -35,7 +36,7 @@ function fixture() {
     useId() { return this.useMemo(() => `uid-${current.id}-${current.cursor}`, []); },
   };
   vm.runInNewContext(source, {
-    window: { __ModuleLoader__: { load(module) { exported = module.factory(() => React); } } },
+    window: { addEventListener() {}, removeEventListener() {}, __ModuleLoader__: { load(module) { exported = module.factory(() => React); } } },
     navigator: { language: 'zh-CN' }, AbortController, AbortSignal, URL,
     setInterval() { return 1; }, clearInterval() {},
     fetch(route, options) { return new Promise((resolve, reject) => requests.push({ route, options, reject, reply(payload) { resolve({ json: async () => payload }); } })); },
@@ -43,7 +44,8 @@ function fixture() {
   function mount(component, props) {
     const owner = { id: mounts.length, hooks: [], effects: [], cursor: 0 };
     const handle = {
-      render() {
+      render(nextProps = props) {
+        props = nextProps;
         current = owner; owner.cursor = 0;
         const value = component(props); current = undefined;
         for (const effect of owner.effects.splice(0)) effect();
@@ -187,4 +189,67 @@ test('matching external rows suppress no-results text and preference remains las
 test('browser connection ranges and defaults stay aligned with the Host', () => {
   const f = fixture();
   assert.deepEqual(plain(f.api.CONNECTION_OPTIONS), CONNECTION_OPTIONS);
+});
+
+const sessionPayload = (sessionId, visible) => ({
+  ok: true, sessionId, overrides: {},
+  servers: [{ id: 'managed', name: 'managed', enabled: true, visible, status: 'ready' }],
+  external: [{ entryId: 'foreign', serverName: 'foreign', enabled: true, visible }],
+});
+function panelControl(panel, t, kind) {
+  const nodes = elements(panel.render());
+  if (kind === 'reset') return nodes.find((node) => node.type === 'button' && node.children.includes(t('sessionReset')));
+  const label = t(kind === 'managed' ? 'sessionToggle' : 'sessionHideExternal', { name: kind === 'managed' ? 'managed' : 'foreign' });
+  return nodes.find((node) => node.type?.name === 'SwitchButton' && node.props.label === label);
+}
+for (const kind of ['managed', 'external', 'reset']) {
+  for (const outcome of ['success', 'failure']) {
+    test(`${kind} ${outcome} from an old session cannot replace state, error or busy status`, async (t) => {
+      const f = fixture(); t.after(f.cleanup);
+      f.api.openSessionPanel('a');
+      const panel = f.mount(f.api.McpSessionPanel, { t: f.t });
+      f.requests[0].reply(sessionPayload('a', true)); await flush();
+      const control = panelControl(panel, f.t, kind);
+      (control.props.onChange ?? control.props.onClick)();
+      const old = f.requests[1];
+      if (kind === 'reset') assert.deepEqual(JSON.parse(old.options.body), { sessionId: 'a', reset: true });
+      f.api.openSessionPanel('b'); panel.render();
+      f.requests[2].reply(sessionPayload('b', false)); await flush();
+      assert.equal(panelControl(panel, f.t, 'managed').props.checked, false);
+      panelControl(panel, f.t, 'managed').props.onChange();
+      assert.deepEqual(JSON.parse(f.requests[3].options.body), { sessionId: 'b', serverId: 'managed', enabled: true });
+      if (outcome === 'success') old.reply(sessionPayload('a', true));
+      else old.reject(new Error('old session failed'));
+      await flush();
+      const current = panelControl(panel, f.t, 'managed');
+      assert.equal(current.props.checked, false, 'B keeps its own visibility');
+      assert.equal(current.props.busy, true, 'A cannot clear B’s pending mutation');
+      assert.equal(elements(panel.render()).some((node) => node.props.role === 'alert'), false);
+      f.requests[3].reply(sessionPayload('b', true)); await flush();
+      assert.equal(panelControl(panel, f.t, 'managed').props.checked, true);
+      panelControl(panel, f.t, 'managed').props.onChange();
+      assert.deepEqual(JSON.parse(f.requests[4].options.body), { sessionId: 'b', serverId: 'managed', enabled: false });
+      f.requests[4].reply(sessionPayload('b', false)); await flush();
+    });
+  }
+}
+
+test('closing and reopening the same session invalidates prior mutations and reads', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  f.api.openSessionPanel('a');
+  const panel = f.mount(f.api.McpSessionPanel, { t: f.t, sessionId: 'a' });
+  f.requests[0].reply(sessionPayload('a', true)); await flush();
+  panelControl(panel, f.t, 'external').props.onChange();
+  f.api.closeSessionPanel();
+  f.api.openSessionPanel('a'); panel.render();
+  f.requests[2].reply(sessionPayload('a', false)); await flush();
+  f.requests[1].reply(sessionPayload('a', true)); await flush();
+  assert.equal(panelControl(panel, f.t, 'external').props.checked, false);
+
+  f.api.closeSessionPanel(); panel.render();
+  f.api.openSessionPanel('a'); panel.render();
+  f.api.openSessionPanel('b'); panel.render({ t: f.t, sessionId: 'b' });
+  f.requests[4].reply(sessionPayload('b', false)); await flush();
+  f.requests[3].reply(sessionPayload('a', true)); await flush();
+  assert.equal(panelControl(panel, f.t, 'managed').props.checked, false);
 });

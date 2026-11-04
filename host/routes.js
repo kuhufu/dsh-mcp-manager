@@ -42,6 +42,12 @@ export const EXPORT_PATH = '/api/mcp-manager.export';
 export const RECOVER_PATH = '/api/mcp-manager.recover';
 /** Absolute path of the individual tool enablement route. */
 export const TOOL_PATH = '/api/mcp-manager.tool';
+/** Absolute path of the per-Session MCP visibility route. */
+export const SESSION_PATH = '/api/mcp-manager.session';
+/** Absolute path of the per-Session override route. */
+export const SESSION_SET_PATH = '/api/mcp-manager.session-set';
+/** Absolute path of the external-entry default-injection route. */
+export const EXTERNAL_DEFAULT_PATH = '/api/mcp-manager.external-default';
 
 /** Every path this bundle owns, in registration order. */
 export const ROUTE_PATHS = Object.freeze([
@@ -57,6 +63,9 @@ export const ROUTE_PATHS = Object.freeze([
   EXPORT_PATH,
   RECOVER_PATH,
   TOOL_PATH,
+  SESSION_PATH,
+  EXTERNAL_DEFAULT_PATH,
+  SESSION_SET_PATH,
 ]);
 
 /**
@@ -171,6 +180,23 @@ export function createFetchRoutes(manager, options = {}) {
     route(manager, EXPORT_PATH, async (body) => ({ ok: true, document: manager.exportServers(body) }), logger),
     route(manager, RECOVER_PATH, async (body) => ({ ok: true, ...await manager.recoverStorage(body) }), logger),
     route(manager, TOOL_PATH, async (body) => ({ ok: true, ...await manager.setToolEnabled({ ...body, id: requireId(body) }) }), logger),
+    route(manager, SESSION_PATH, async (body) => {
+      if (typeof body.sessionId !== 'string' || body.sessionId === '') {
+        throw new ManagerError('invalid', 'request body must include a non-empty "sessionId"', 'sessionId');
+      }
+      return { ok: true, ...manager.sessionView(body.sessionId) };
+    }, logger),
+    route(manager, EXTERNAL_DEFAULT_PATH, async (body) => ({ ok: true, ...await manager.setExternalDefault(body) }), logger),
+    route(manager, SESSION_SET_PATH, async (body) => {
+      if (body.reset === true) return { ok: true, ...await manager.resetSession({ sessionId: body.sessionId }) };
+      const enabled = body.enabled === undefined ? null : body.enabled;
+      if (typeof body.entryId === 'string' && body.entryId !== '') {
+        const result = await manager.setSessionExternalEnabled({ sessionId: body.sessionId, entryId: body.entryId, enabled });
+        return { ok: true, ...result };
+      }
+      const result = await manager.setSessionEnabled({ sessionId: body.sessionId, serverId: body.serverId, enabled });
+      return { ok: true, ...result };
+    }, logger),
   ];
 }
 
@@ -214,7 +240,7 @@ function route(manager, path, handle, logger) {
         const payload = await handle(body);
         // Every success response also carries the read-only foreign rows and
         // the current page preference, so one response can drive the page.
-        const enriched = { ...payload, external: manager.external(), ui: manager.ui(), storage: manager.storage() };
+        const enriched = { ...payload, external: payload.external ?? manager.external(), ui: manager.ui(), storage: manager.storage() };
         return jsonResponse(200, enriched);
       } catch (error) {
         const failure = toFailure(error, logger, path);

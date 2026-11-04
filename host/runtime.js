@@ -22,6 +22,36 @@ import { connect, buildToolDefinitions } from './mcp.js';
  */
 export function createRuntime({ ctx, store, logger, track, warn, fail, isDisposed }) {
   const runtime = new Map();
+  /** @type {Set<(serverId: string) => void>} */
+  const definitionListeners = new Set();
+  /** @type {Set<string>|null} desired connection set; `null` follows each record's own flag. */
+  let desired = null;
+
+  /**
+   * Notify observers that one server's tool definitions changed.
+   * @param {string} serverId - server id.
+   * @returns {void}
+   */
+  function notify(serverId) {
+    for (const listener of [...definitionListeners]) {
+      try {
+        listener(serverId);
+      } catch (error) {
+        warn(`definition listener failed: ${formatError(error)}`);
+      }
+    }
+  }
+
+  /**
+   * Observe definition changes (per-agent registrations re-sync on them).
+   * @param {(serverId: string) => void} listener - change sink.
+   * @returns {() => void} unsubscribe.
+   */
+  function subscribe(listener) {
+    definitionListeners.add(listener);
+    return () => definitionListeners.delete(listener);
+  }
+
   /**
    * Fetch (or create) the runtime entry for one server id.
    * @param {string} id - server id.
@@ -40,7 +70,6 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
         connectedAt: undefined,
         connection: undefined,
         controller: undefined,
-        disposers: [],
         fingerprint: undefined,
         attempt: 0,
         retryAttempt: 0,
@@ -50,17 +79,6 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
       runtime.set(id, state);
     }
     return state;
-  }
-
-  /** Release one runtime entry's tool registrations. */
-  function disposeTools(state) {
-    for (const dispose of state.disposers.splice(0)) {
-      try {
-        dispose();
-      } catch (error) {
-        warn(`tool disposal failed: ${formatError(error)}`);
-      }
-    }
   }
 
   /** Reset one runtime entry to a non-connected status. */
@@ -73,7 +91,6 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.serverInfo = undefined;
     state.instructions = undefined;
     state.connectedAt = undefined;
-    state.fingerprint = undefined;
   }
 
   /** Fields whose change requires a fresh connection and tool swap. */
@@ -103,8 +120,13 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.nextRetryAt = undefined;
   }
 
+  /** Use the same connection demand for initial attempts, retries and refreshes. */
+  function wantsConnection(server) {
+    return server !== undefined && (desired === null ? server.enabled : desired.has(server.id));
+  }
+
   function retry(server, state) {
-    if (isDisposed() || !server.enabled || state.retryAttempt >= (server.retryCount ?? 0)) return;
+    if (isDisposed() || !wantsConnection(server) || state.retryAttempt >= (server.retryCount ?? 0)) return;
     cancelRetry(state);
     const delay = Math.min(30000, 1000 * 2 ** state.retryAttempt);
     state.retryAttempt += 1;
@@ -114,7 +136,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
       state.retryTimer = undefined;
       state.nextRetryAt = undefined;
       const current = store.list().find((item) => item.id === server.id);
-      if (!isDisposed() && current?.enabled) track(startServer(current));
+      if (!isDisposed() && wantsConnection(current)) track(startServer(current));
     }, delay);
   }
 
@@ -135,22 +157,28 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
       },
     });
     const disabled = new Set(server.disabledTools ?? []);
+    // Re-installing an identical generation only re-notifies every agent.
+    const signature = `${server.name}\u0000${all.map((item) => item.rawName).join('\u0000')}\u0000${[...disabled].sort().join('\u0000')}`;
+    // A restarted connection needs its tools registered again even when the
+    // definition list is identical, so the connection identity is part of the key.
+    if (
+      state.toolsConnection === connection
+      && state.toolsSource === tools
+      && state.toolsSignature === signature
+      && Array.isArray(state.tools)
+    ) return;
+    state.toolsConnection = connection;
+    state.toolsSource = tools;
+    state.toolsSignature = signature;
+    // Same names can still carry new descriptions/schemas: agents key their
+    // registrations off this revision, not off the definition bodies.
+    state.toolsRevision = (state.toolsRevision ?? 0) + 1;
     const next = all.filter((item) => !disabled.has(item.rawName));
-    const previous = state.definitions;
-    const registered = [];
-    disposeTools(state);
-    try {
-      for (const item of next) registered.push(ctx.tools.register(item.definition));
-    } catch (error) {
-      for (const dispose of registered) dispose();
-      state.disposers = previous.map((item) => ctx.tools.register(item.definition));
-      throw error;
-    }
     state.definitions = next;
-    state.disposers = registered;
     state.tools = all.map((item) => ({ name: item.rawName, publicName: item.name, description: item.description, enabled: !disabled.has(item.rawName) }));
     state.toolCount = next.length;
     connection.tools = tools;
+    notify(server.id);
   }
 
   /**
@@ -166,8 +194,9 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
 
     const previous = state.connection;
     state.connection = undefined;
-    disposeTools(state);
     resetState(state, 'connecting');
+    state.fingerprint = fingerprintOf(server);
+    notify(server.id);
     if (previous !== undefined) {
       // Only reachable through an explicit restart; settle the old child first.
       try {
@@ -209,8 +238,8 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     connection.onClose((reason) => {
       if (state.connection !== connection || attempt !== state.attempt) return;
       state.connection = undefined;
-      disposeTools(state);
       resetState(state, 'error');
+      notify(server.id);
       state.error = reason;
       warn(`"${server.name}" connection closed: ${reason}`);
       log(state, 'error', reason);
@@ -219,7 +248,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
 
     if (connection.closed) return;
     try {
-      installTools(server, state, connection, connection.tools);
+      installTools(store.list().find((item) => item.id === server.id) ?? server, state, connection, connection.tools);
     } catch (error) {
       await connection.close().catch(() => {});
       state.connection = undefined;
@@ -243,7 +272,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
             const tools = await connection.listTools();
             if (state.connection !== connection || isDisposed()) return;
             const current = store.list().find((item) => item.id === server.id);
-            if (!current?.enabled) return;
+            if (!wantsConnection(current)) return;
             installTools(current, state, connection, tools);
             log(state, 'info', `Tool list refreshed: ${state.toolCount} enabled`);
           }
@@ -273,10 +302,11 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.retryAttempt = 0;
     state.controller?.abort();
     state.controller = undefined;
-    disposeTools(state);
     const connection = state.connection;
     state.connection = undefined;
     resetState(state, 'stopped');
+    state.fingerprint = undefined;
+    notify(server.id);
     if (connection !== undefined) {
       try {
         await connection.close();
@@ -301,8 +331,9 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     const attempt = (state.attempt += 1);
     state.controller?.abort();
     state.controller = undefined;
-    disposeTools(state);
     resetState(state, 'connecting');
+    state.fingerprint = fingerprintOf(server);
+    notify(server.id);
     track((async () => {
       if (previous !== undefined) {
         try {
@@ -322,17 +353,62 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
    */
   function reconcile(server) {
     const state = ensureState(server.id);
-    if (!server.enabled) {
-      track(stopServer(server));
+    if (!wantsConnection(server)) {
+      if (state.status !== 'stopped') track(stopServer(server));
       return;
     }
-    if (state.status === 'ready' && state.connection !== undefined && state.fingerprint === fingerprintOf(server)) {
-      installTools(server, state, state.connection, state.connection.tools);
+    // An errored generation keeps its own retry timer and backoff budget; only a
+    // demand or configuration change should restart it.
+    if (state.status !== 'stopped' && state.fingerprint === fingerprintOf(server)) {
+      if (state.status === 'ready' && state.connection !== undefined) {
+        installTools(server, state, state.connection, state.connection.tools);
+      }
+      // An unchanged connecting/error generation owns its handshake, retry
+      // timer and exhausted retry budget until demand or configuration changes.
       return;
     }
     reconnectServer(server);
   }
 
+
+  /**
+   * Replace the desired connection set and reconcile every record.
+   * @param {Iterable<string>} desiredIds - server ids that should be connected.
+   * @returns {void}
+   */
+  function applyDesired(desiredIds) {
+    desired = new Set(desiredIds);
+    for (const server of store.list()) reconcile(server);
+  }
+
+  /**
+   * Revision of the installed tool generation of one server; bumps on every
+   * successful (re)installation.
+   * @param {string} id - server id.
+   * @returns {number} revision counter.
+   */
+  function revisionOf(id) {
+    return ensureState(id).toolsRevision ?? 0;
+  }
+
+  /**
+   * Connection generation of one server: changes across reconnects, so callers
+   * can detect that the registered closures point at a closed connection.
+   * @param {string} id - server id.
+   * @returns {number} monotonically increasing attempt counter.
+   */
+  function generationOf(id) {
+    return ensureState(id).attempt;
+  }
+
+  /**
+   * Current tool definitions for one connected server.
+   * @param {string} id - server id.
+   * @returns {object[]} definitions registered per agent.
+   */
+  function definitionsOf(id) {
+    return runtime.get(id)?.definitions ?? [];
+  }
 
   async function stopAll() {
     await Promise.all([...runtime.keys()].map((id) => stopServer({ id })));
@@ -342,7 +418,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     const state = runtime.get(server.id);
     if (state?.connection && state.status === 'ready') installTools(server, state, state.connection, state.connection.tools);
   }
-  return { stateOf: (id) => runtime.get(id), startServer, stopServer, reconnectServer, reconcile, updateTools, stopAll,
+  return { stateOf: (id) => runtime.get(id), startServer, stopServer, reconnectServer, reconcile, updateTools, applyDesired, definitionsOf, generationOf, revisionOf, subscribe, stopAll,
     hasTool: (id, name) => runtime.get(id)?.tools.some((tool) => tool.name === name) ?? false,
     forget: (id) => runtime.delete(id) };
 }

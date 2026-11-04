@@ -107,9 +107,20 @@ const pluginManager = {
 
 const routes = new Map();
 const registeredTools = [];
+/** Event listeners the plugin registers (agent lifecycle). */
+const listeners = new Map();
 
 const ctx = {
   logger: { info() {}, warn() {}, error() {} },
+  on(event, listener) {
+    const list = listeners.get(event) ?? [];
+    list.push(listener);
+    listeners.set(event, list);
+    return () => {
+      const index = list.indexOf(listener);
+      if (index >= 0) list.splice(index, 1);
+    };
+  },
   tools: {
     register: (definition) => {
       registeredTools.push(definition.name);
@@ -140,6 +151,12 @@ const ctx = {
 };
 
 apply(ctx);
+const fakeAgent = {
+  id: 'agent-external',
+  session: { id: 'session-external' },
+  ctx: { tools: ctx.tools, effect: (body) => body() },
+};
+for (const listener of [...(listeners.get('agent/created') ?? [])]) listener({ agent: fakeAgent });
 
 const call = async (path, body) => {
   const route = routes.get(path);

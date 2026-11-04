@@ -213,6 +213,7 @@ export function validateServerInput(input, context = {}) {
   if (input.disabledTools !== undefined) {
     normalized.disabledTools = [...new Set(normalizeStringList(input.disabledTools, 'disabledTools'))];
   }
+  if (input.autoInject !== undefined) normalized.autoInject = input.autoInject;
   return normalized;
 }
 

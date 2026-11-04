@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
       takeover: 'api/mcp-manager.takeover',
       ui: 'api/mcp-manager.ui',
       toggleExternal: 'api/mcp-manager.toggle-external',
+      session: 'api/mcp-manager.session',
+      sessionSet: 'api/mcp-manager.session-set',
+      externalDefault: 'api/mcp-manager.external-default',
       import: 'api/mcp-manager.import',
       export: 'api/mcp-manager.export',
       recover: 'api/mcp-manager.recover',
@@ -149,6 +152,9 @@ window.__ModuleLoader__.load({
       fieldName: 'Name',
       fieldNameHint: 'Tool namespace: 1–32 letters, digits, underscores or dashes, unique across servers.',
       fieldTransport: 'Transport',
+      fieldAutoInject: 'Inject into every session by default',
+      fieldAutoInjectShort: 'Inject by default',
+      fieldAutoInjectHint: 'Turn off for servers with many tools: they stay disconnected until a session enables them from /mcp.',
       fieldCommand: 'Command',
       fieldCommandHint: 'Executable to launch, for example npx.',
       fieldArgs: 'Arguments',
@@ -182,6 +188,17 @@ window.__ModuleLoader__.load({
       errLoad: 'Could not load the server list.',
       railLabel: 'Show in the sidebar',
       railHint: 'Adds this page as a panel in the left rail; turning it off keeps Settings → MCP servers.',
+      sessionTitle: 'MCP servers for this session',
+      sessionHint: 'Only this session is affected; the saved configuration is unchanged.',
+      sessionReset: 'Reset to the global configuration',
+      sessionEmpty: 'No MCP servers are configured yet.',
+      sessionLoading: 'Loading servers…',
+      sessionToggle: 'Toggle {name} for this session',
+      sessionHidden: 'Hidden here',
+      sessionExternalTitle: 'Provided by dsh-mcp-client entries',
+      sessionExternalHint: 'Another plugin registers these tools globally; the switches here only hide them from this session.',
+      sessionGlobal: 'Global',
+      sessionHideExternal: 'Hide {name} from this session',
     };
     /** Simplified Chinese copy. */
     const zh = {
@@ -281,6 +298,9 @@ window.__ModuleLoader__.load({
       fieldName: '名称',
       fieldNameHint: '工具命名空间：1–32 个字母、数字、下划线或短横线，且不可与其他服务器重名。',
       fieldTransport: '连接方式',
+      fieldAutoInject: '默认注入到每个会话',
+      fieldAutoInjectShort: '默认注入',
+      fieldAutoInjectHint: '工具很多的服务器建议关闭：默认不连接，直到某个会话在 /mcp 里按需开启。',
       fieldCommand: '命令',
       fieldCommandHint: '要启动的可执行文件，例如 npx。',
       fieldArgs: '参数',
@@ -314,6 +334,17 @@ window.__ModuleLoader__.load({
       errLoad: '无法读取服务器列表。',
       railLabel: '在左侧栏显示入口',
       railHint: '把本页作为面板加入左侧栏；关闭后仍保留“设置 → MCP 服务器”。',
+      sessionTitle: '本会话的 MCP 服务器',
+      sessionHint: '只影响当前会话，不会改动已保存的配置。',
+      sessionReset: '恢复全局配置',
+      sessionEmpty: '还没有配置任何 MCP 服务器。',
+      sessionLoading: '正在加载服务器…',
+      sessionToggle: '为当前会话开关 {name}',
+      sessionHidden: '本会话已隐藏',
+      sessionExternalTitle: '由 dsh-mcp-client 条目提供',
+      sessionExternalHint: '这些服务器由其他插件全局注册；这里的开关只对当前会话隐藏它们的工具。',
+      sessionGlobal: '全局',
+      sessionHideExternal: '为当前会话隐藏 {name}',
     };
 
     // ── wire helpers ──────────────────────────────────────────────────────
@@ -514,6 +545,7 @@ window.__ModuleLoader__.load({
         name: server ? server.name : '',
         transport: server && server.transport === 'http' ? 'http' : 'stdio',
         enabled: server ? server.enabled !== false : true,
+        autoInject: server ? server.autoInject !== false : true,
         command: server && server.command ? server.command : '',
         args: server && Array.isArray(server.args) ? server.args.join('\n') : '',
         env: server ? pairsToText(server.env) : '',
@@ -539,6 +571,7 @@ window.__ModuleLoader__.load({
       else if (others.some((server) => server.name === name)) errors.name = t('errNameDuplicate');
 
       const input = { name, enabled: draft.enabled, transport: draft.transport };
+      input.autoInject = draft.autoInject !== false;
       if (draft.transport === 'http') {
         const url = draft.url.trim();
         if (!isHttpUrl(url)) errors.url = t('errUrl');
@@ -830,6 +863,7 @@ window.__ModuleLoader__.load({
     function ExternalList(props) {
       const t = props.t;
       const [confirmId, setConfirmId] = React.useState(null);
+      const [openId, setOpenId] = React.useState(null);
       return h(
         'div',
         { className: 'dshmcp-external' },
@@ -845,6 +879,7 @@ window.__ModuleLoader__.load({
               ? item.url || ''
               : [item.command, ...(Array.isArray(item.args) ? item.args : [])].filter(Boolean).join(' ');
             const busy = props.busyIds.has(item.entryId);
+            const open = openId === item.entryId;
             const confirming = confirmId === item.entryId;
             return h(
               'li',
@@ -858,21 +893,77 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { className: 'dshmcp-name-row' },
-                    h('span', { className: 'dshmcp-name' }, name),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dshmcp-disclosure',
+                        'aria-expanded': open ? 'true' : 'false',
+                        onClick: () => setOpenId(open ? null : item.entryId),
+                      },
+                      h(
+                        'svg',
+                        {
+                          className: 'dshmcp-chevron',
+                          viewBox: '0 0 16 16',
+                          width: 12,
+                          height: 12,
+                          'aria-hidden': 'true',
+                          style: { transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s ease' },
+                        },
+                        h('path', {
+                          d: 'M6 3.5 10.5 8 6 12.5',
+                          fill: 'none',
+                          stroke: 'currentColor',
+                          strokeWidth: 1.6,
+                          strokeLinecap: 'round',
+                          strokeLinejoin: 'round',
+                        }),
+                      ),
+                      h('span', { className: 'dshmcp-name' }, name),
+                    ),
                     h(
                       'span',
                       { className: 'dshmcp-state' },
                       item.enabled ? t('externalActive') : t('statusDisabled'),
                     ),
                   ),
-                  summary ? h('span', { className: 'dshmcp-summary', title: summary }, summary) : null,
+                  summary
+                    ? h('span', { className: 'dshmcp-summary', style: open ? undefined : { display: 'none' }, title: summary }, summary)
+                    : null,
                   h(
                     'div',
-                    { className: 'dshmcp-meta' },
+                    { className: 'dshmcp-meta', style: open ? undefined : { display: 'none' } },
                     h('span', { className: 'dshmcp-chip' }, t(http ? 'shortHttp' : 'shortStdio')),
                     h('span', null, t('toolCount', { count: item.toolCount || 0 })),
                     item.shadowed ? h('span', { className: 'dshmcp-chip' }, t('externalShadowed')) : null,
                     item.entryId ? h('span', { className: 'dshmcp-mono' }, item.entryId) : null,
+                    h(
+                      'div',
+                      { className: 'dshmcp-detail-row' },
+                    h(
+                      'label',
+                      { className: 'dshmcp-meta-toggle', title: t('fieldAutoInjectHint') },
+                      h(SwitchButton, {
+                        checked: item.autoInject !== false,
+                        disabled: busy,
+                        label: t('fieldAutoInjectShort'),
+                        onChange: () => props.onDefaultInject(item, item.autoInject === false),
+                      }),
+                      h('span', null, t('fieldAutoInjectShort')),
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dshmcp-btn dshmcp-btn-small',
+                        style: { marginLeft: 'auto' },
+                        disabled: busy || confirming,
+                        onClick: () => setConfirmId(item.entryId),
+                      },
+                      t('takeover'),
+                    ),
+                    ),
                   ),
                 ),
                 h(
@@ -892,6 +983,7 @@ window.__ModuleLoader__.load({
                     {
                       type: 'button',
                       className: 'dshmcp-btn dshmcp-btn-small',
+                      style: { display: 'none' },
                       disabled: busy || confirming,
                       'aria-busy': busy ? 'true' : undefined,
                       onClick: () => setConfirmId(item.entryId),
@@ -1423,6 +1515,22 @@ window.__ModuleLoader__.load({
               h('option', { value: 'http' }, t('transportHttp')),
             ),
           ),
+          h(
+            'div',
+            { className: 'dshmcp-field' },
+            h(
+              'label',
+              { className: 'dshmcp-checkbox', htmlFor: id('autoInject') },
+              h('input', {
+                id: id('autoInject'),
+                type: 'checkbox',
+                checked: draft.autoInject !== false,
+                onChange: (event) => setDraft((previous) => ({ ...previous, autoInject: event.target.checked })),
+              }),
+              h('span', null, t('fieldAutoInject')),
+            ),
+            h('p', { className: 'dshmcp-field-hint' }, t('fieldAutoInjectHint')),
+          ),
         ),
       );
 
@@ -1720,6 +1828,7 @@ window.__ModuleLoader__.load({
       reconnect: (id) => mutateData(ROUTES.reconnect, { id }),
       takeover: (entryId) => mutateData(ROUTES.takeover, { entryId }),
       toggleExternal: (entryId, enabled) => mutateData(ROUTES.toggleExternal, { entryId, enabled }),
+      setExternalDefault: (entryId, autoInject) => mutateData(ROUTES.externalDefault, { entryId, autoInject }),
       setRailEntry: (railEntry) => mutateData(ROUTES.ui, { railEntry }),
       setToolEnabled: (id, name, enabled) => mutateData(ROUTES.tool, { id, name, enabled }),
       importServers: (document) => mutateData(ROUTES.import, { document }),
@@ -1855,6 +1964,312 @@ window.__ModuleLoader__.load({
           } }, t('download'))));
     }
 
+
+    // ── per-session `/mcp` panel ──────────────────────────────────────────
+    /** Session whose panel is open, if any. */
+    let panelSessionId = null;
+    let panelGeneration = 0;
+    /** Components observing the open/closed state. */
+    const panelSubscribers = new Set();
+
+    /**
+     * Open the panel for one Session.
+     * @param sessionId - the Session that invoked `/mcp`.
+     */
+    function openSessionPanel(sessionId) {
+      panelSessionId = sessionId;
+      panelGeneration += 1;
+      for (const notify of [...panelSubscribers]) notify();
+    }
+
+    /** Close the panel and return focus to the composer. */
+    function closeSessionPanel() {
+      panelSessionId = null;
+      panelGeneration += 1;
+      for (const notify of [...panelSubscribers]) notify();
+    }
+
+    /**
+     * Subscribe one component to the panel's open/closed state.
+     * @param sessionId - the Session this component renders for.
+     * @returns whether the panel is open for that Session.
+     */
+    function usePanelOpen(sessionId) {
+      const [, tick] = React.useReducer((value) => value + 1, 0);
+      React.useEffect(() => {
+        panelSubscribers.add(tick);
+        return () => {
+          panelSubscribers.delete(tick);
+        };
+      }, []);
+      return panelSessionId === sessionId;
+    }
+
+    /** Shared control primitives the panel reuses outside the settings page. */
+    const PANEL_PRIMITIVES = `
+.dshmcp-btn{box-sizing:border-box;height:36px;padding:0 14px;border-radius:var(--dsw-radius-md);border:.5px solid var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:14px;line-height:22px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;white-space:nowrap}
+.dshmcp-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.dshmcp-btn:focus-visible{box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline:none}
+.dshmcp-btn:disabled{opacity:.4;cursor:default}
+.dshmcp-btn-small{height:28px;padding:0 10px;font-size:12px;line-height:18px;border-radius:var(--dsw-radius-sm)}
+.dshmcp-icon-btn{box-sizing:border-box;width:28px;height:28px;padding:0;border-radius:var(--dsw-radius-sm);border:0;background:transparent;color:var(--dsw-alias-label-secondary);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+.dshmcp-icon-btn:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-label-primary) 7%,transparent);color:var(--dsw-alias-label-primary)}
+.dshmcp-icon-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.dshmcp-icon-btn:disabled{opacity:.45;cursor:default}
+.dshmcp-switch{position:relative;box-sizing:border-box;width:36px;height:20px;padding:0;border-radius:999px;border:.5px solid var(--dsw-alias-border-l3);background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background .15s ease,border-color .15s ease}
+.dshmcp-switch::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transform:translateY(-50%);transition:left .15s ease}
+.dshmcp-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary);border-color:transparent}
+.dshmcp-switch[aria-checked=true]::after{left:18px}
+.dshmcp-switch[aria-busy=true]{cursor:progress}
+.dshmcp-switch[aria-busy=true]::after{opacity:.35}
+.dshmcp-switch:disabled{cursor:default;opacity:.5}
+.dshmcp-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
+.dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
+.dshmcp-dot[data-state=ready]{background:var(--dsw-alias-state-success-primary)}
+.dshmcp-dot[data-state=connecting]{background:var(--dsw-alias-state-warn-primary)}
+.dshmcp-dot[data-state=error]{background:var(--dsw-alias-state-error-primary)}
+`;
+
+    /** Styles for the panel; mounted with it, so unmounting removes them. */
+    const PANEL_STYLE = PANEL_PRIMITIVES + `
+.dshmcp-session-panel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:100;pointer-events:auto;box-sizing:border-box;max-height:60vh;overflow-y:auto;border-radius:var(--dsw-radius-lg);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent);padding:12px;display:flex;flex-direction:column;gap:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}
+.dshmcp-session-head{display:flex;align-items:flex-start;gap:8px}
+.dshmcp-session-titles{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.dshmcp-session-title{margin:0;font-size:14px;font-weight:600;line-height:20px}
+.dshmcp-session-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dshmcp-session-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}
+.dshmcp-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:40vh;overflow-y:auto}
+.dshmcp-session-row{display:flex;align-items:center;gap:8px;min-height:32px}
+.dshmcp-session-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshmcp-session-status{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
+.dshmcp-session-section{display:flex;flex-direction:column;gap:4px;padding-top:8px;border-top:.5px solid var(--dsw-alias-border-l2)}
+.dshmcp-session-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px}
+.dshmcp-session-badge{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;white-space:nowrap}
+.dshmcp-session-foot{display:flex;justify-content:flex-end;padding-top:4px}
+`;
+
+    /**
+     * Header entry that opens the same panel without typing a command.
+     * @param props - slot props; `sessionId` comes from the slot's `inject` hook.
+     * @returns the header button, or null without a Session.
+     */
+    function McpHeaderEntry(props) {
+      const t = React.useMemo(
+        () => (typeof props.t === 'function' ? props.t : directTranslator()),
+        [props.t],
+      );
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : props.session?.id;
+      if (typeof sessionId !== 'string') return null;
+      return h(
+        'button',
+        {
+          type: 'button',
+          title: t('sessionTitle'),
+          'aria-label': t('sessionTitle'),
+          onClick: () => openSessionPanel(sessionId),
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '28px',
+            padding: '0 8px',
+            border: '0',
+            borderRadius: 'var(--dsw-radius-sm)',
+            background: 'transparent',
+            color: 'var(--dsw-alias-label-secondary)',
+            cursor: 'pointer',
+            font: 'inherit',
+            fontSize: '13px',
+          },
+        },
+        h(Icon, { name: 'server', size: 16 }),
+        h('span', null, t('nav')),
+      );
+    }
+
+    /**
+     * The `/mcp` panel: one Session's MCP visibility, toggled in place.
+     * @param props - slot props; `sessionId` comes from the slot's `inject` hook.
+     * @returns the panel, or null while closed.
+     */
+    function McpSessionPanel(props) {
+      const t = React.useMemo(
+        () => (typeof props.t === 'function' ? props.t : directTranslator()),
+        [props.t],
+      );
+      // Some shells do not pass `inject:` props to slot entries; the action that
+      // opened the panel already recorded the Session, so fall back to it.
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : panelSessionId;
+      const open = usePanelOpen(sessionId);
+      const generation = panelGeneration;
+      const [snapshot, setSnapshot] = React.useState(null);
+      const state = snapshot?.sessionId === sessionId && snapshot?.generation === generation ? snapshot.payload : null;
+      const [failure, setFailure] = React.useState(null);
+      const [busy, setBusy] = React.useState(null);
+      const requestGeneration = React.useRef(0);
+      // Slots may hand a fresh `t` each render; keeping it in a ref stops that
+      // from re-running the fetch effect (a request per parent render).
+      const translate = React.useRef(t);
+      translate.current = t;
+      const pendingMutation = React.useRef(null);
+      const isCurrent = (request) => requestGeneration.current === request
+        && panelSessionId === sessionId && panelGeneration === generation;
+      const accept = (payload) => setSnapshot({ sessionId, generation, payload });
+
+      React.useEffect(() => {
+        const request = ++requestGeneration.current;
+        pendingMutation.current = null;
+        setSnapshot(null);
+        setBusy(null);
+        setFailure(null);
+        if (open && typeof sessionId === 'string') {
+          post(ROUTES.session, { sessionId })
+            .then((payload) => {
+              if (isCurrent(request)) accept(payload);
+            })
+            .catch((error) => {
+              if (isCurrent(request)) setFailure(explain(error, translate.current));
+            });
+        }
+        return () => { requestGeneration.current += 1; };
+      }, [open, sessionId, generation]);
+
+      React.useEffect(() => {
+        if (!open) return undefined;
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeSessionPanel();
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+      }, [open]);
+
+      if (!open || typeof sessionId !== 'string') return null;
+
+      const mutate = (key, body) => {
+        if (pendingMutation.current !== null || state === null
+          || panelSessionId !== sessionId || panelGeneration !== generation) return;
+        const request = ++requestGeneration.current;
+        pendingMutation.current = request;
+        setBusy(key);
+        post(ROUTES.sessionSet, { sessionId, ...body })
+          .then((payload) => {
+            if (!isCurrent(request)) return;
+            accept(payload);
+            setFailure(null);
+          })
+          .catch((error) => {
+            if (isCurrent(request)) setFailure(explain(error, t));
+          })
+          .finally(() => {
+            if (!isCurrent(request)) return;
+            pendingMutation.current = null;
+            setBusy(null);
+          });
+      };
+      const toggle = (server) => mutate(server.id, { serverId: server.id, enabled: !server.visible });
+      const toggleExternal = (item) => mutate(item.entryId, { entryId: item.entryId, enabled: !item.visible });
+      const reset = () => mutate('reset', { reset: true });
+
+      return h(
+        'div',
+        { className: 'dshmcp-session-panel', role: 'dialog', 'aria-label': t('sessionTitle') },
+        h('style', null, PANEL_STYLE),
+        h(
+          'div',
+          { className: 'dshmcp-session-head' },
+          h(
+            'div',
+            { className: 'dshmcp-session-titles' },
+            h('h3', { className: 'dshmcp-session-title' }, t('sessionTitle')),
+            h('p', { className: 'dshmcp-session-hint' }, t('sessionHint')),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshmcp-icon-btn',
+              'aria-label': t('closeDialog'),
+              title: t('closeDialog'),
+              onClick: closeSessionPanel,
+            },
+            h(Icon, { name: 'close' }),
+          ),
+        ),
+        failure === null ? null : h('p', { className: 'dshmcp-session-error', role: 'alert' }, failure),
+        state === null
+          ? h('p', { className: 'dshmcp-session-hint' }, t('sessionLoading'))
+          : state.servers.length === 0
+            ? h('p', { className: 'dshmcp-session-hint' }, t('sessionEmpty'))
+            : h(
+                'ul',
+                { className: 'dshmcp-session-list' },
+                state.servers.map((server) =>
+                  h(
+                    'li',
+                    { key: server.id, className: 'dshmcp-session-row' },
+                    h(StatusDot, { phase: phaseOf(server) }),
+                    h('span', { className: 'dshmcp-session-name' }, server.name),
+                    h('span', { className: 'dshmcp-session-status' }, server.visible ? t(PHASE_KEY[phaseOf(server)]) : t('sessionHidden')),
+                    h(SwitchButton, {
+                      checked: server.visible,
+                      busy: busy === server.id,
+                      disabled: busy !== null && busy !== server.id,
+                      label: t('sessionToggle', { name: server.name }),
+                      onChange: () => toggle(server),
+                    }),
+                  ),
+                ),
+              ),
+        state !== null && Array.isArray(state.external) && state.external.length > 0
+          ? h(
+              'div',
+              { className: 'dshmcp-session-section' },
+              h('p', { className: 'dshmcp-session-subtitle' }, t('sessionExternalTitle')),
+              h('p', { className: 'dshmcp-session-hint' }, t('sessionExternalHint')),
+              h(
+                'ul',
+                { className: 'dshmcp-session-list' },
+                state.external.map((item) =>
+                  h(
+                    'li',
+                    { key: item.entryId, className: 'dshmcp-session-row' },
+                    h(StatusDot, { phase: item.enabled ? 'ready' : 'disabled' }),
+                    h('span', { className: 'dshmcp-session-name' }, item.serverName || item.entryId),
+                    item.enabled
+                      ? h('span', { className: 'dshmcp-session-status' }, item.visible ? t('sessionGlobal') : t('sessionHidden'))
+                      : h('span', { className: 'dshmcp-session-badge' }, t('statusDisabled')),
+                    h(SwitchButton, {
+                      checked: item.visible,
+                      busy: busy === item.entryId,
+                      disabled: busy !== null,
+                      label: t('sessionHideExternal', { name: item.serverName || item.entryId }),
+                      onChange: () => toggleExternal(item),
+                    }),
+                  ),
+                ),
+              ),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'dshmcp-session-foot' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dshmcp-btn dshmcp-btn-small',
+              onClick: reset,
+              disabled: busy !== null || state === null,
+            },
+            t('sessionReset'),
+          ),
+        ),
+      );
+    }
+
     // ── the section ───────────────────────────────────────────────────────
     /**
      * Render the MCP servers settings page.
@@ -1920,6 +2335,11 @@ window.__ModuleLoader__.load({
       const takeoverServer = (item) =>
         run(item.entryId, async () => {
           await actions.takeover(item.entryId);
+        });
+
+      const setExternalDefault = (item, autoInject) =>
+        run(item.entryId, async () => {
+          await actions.setExternalDefault(item.entryId, autoInject);
         });
 
       const toggleExternal = (item) =>
@@ -2064,7 +2484,7 @@ window.__ModuleLoader__.load({
                 ),
         foreign.length === 0
           ? null
-          : h(ExternalList, { t, items: foreign, busyIds, onTakeover: takeoverServer, onToggle: toggleExternal }),
+          : h(ExternalList, { t, items: foreign, busyIds, onTakeover: takeoverServer, onToggle: toggleExternal, onDefaultInject: setExternalDefault }),
         ),
         h(ConfigTransfer, { t, readOnly: storage.readOnly, actions }),
         h('div', { inert: storage.readOnly ? '' : undefined }, h(RailPreferenceRow, {
@@ -2156,16 +2576,17 @@ window.__ModuleLoader__.load({
 .dshmcp-banner-detail{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dshmcp-banner .dshmcp-btn{flex:none;align-self:center}
 .dshmcp-list{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
-.dshmcp-row{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-module-platform);min-width:0}
+.dshmcp-row{display:flex;flex-direction:column;gap:10px;padding:18px 18px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-module-platform);min-width:0}
 .dshmcp-btn-square{width:36px;padding:0}
 .dshmcp-external{display:flex;flex-direction:column;gap:8px;margin-top:20px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l2)}
 .dshmcp-external .dshmcp-row{background:transparent;border:.5px dashed var(--dsw-alias-border-l2)}
-.dshmcp-line{display:flex;align-items:center;gap:12px;min-width:0}
+.dshmcp-line{display:flex;align-items:flex-start;gap:12px;min-width:0}
+.dshmcp-actions{padding-top:1px}
 .dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
 .dshmcp-dot[data-state=ready]{background:var(--dsw-alias-state-success-primary)}
 .dshmcp-dot[data-state=connecting]{background:var(--dsw-alias-state-warn-primary);animation:dshmcp-pulse 1.4s ease-in-out infinite}
 .dshmcp-dot[data-state=error]{background:var(--dsw-alias-state-error-primary)}
-.dshmcp-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.dshmcp-main{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
 .dshmcp-name-row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
 .dshmcp-name{font-size:14px;font-weight:500;line-height:20px;overflow-wrap:anywhere}
 .dshmcp-row[data-state=idle] .dshmcp-name{color:var(--dsw-alias-label-secondary)}
@@ -2174,7 +2595,13 @@ window.__ModuleLoader__.load({
 .dshmcp-state[data-state=connecting]{color:var(--dsw-alias-state-warn-primary)}
 .dshmcp-state[data-state=error]{color:var(--dsw-alias-state-error-primary)}
 .dshmcp-summary{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.dshmcp-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);min-width:0}
+.dshmcp-chevron{font-size:11px;line-height:1;color:var(--dsw-alias-label-tertiary);transition:color .15s ease}
+.dshmcp-disclosure:hover .dshmcp-chevron{color:var(--dsw-alias-brand-primary)}
+.dshmcp-disclosure{display:flex;align-items:center;gap:4px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;min-width:0}
+.dshmcp-disclosure:hover{color:var(--dsw-alias-brand-primary)}
+.dshmcp-detail-row{display:flex;align-items:center;gap:12px;margin-top:2px}
+.dshmcp-meta-toggle{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dshmcp-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin-top:4px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);min-width:0}
 .dshmcp-chip{border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);padding:0 5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:16px;text-transform:lowercase}
 .dshmcp-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
 .dshmcp-actions{display:flex;align-items:center;gap:2px;flex:none}
@@ -2262,6 +2689,46 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'mcp-manager: section dictionaries');
+      // `/mcp`: the host command carries the argument form; this decoration adds
+      // the bare-invocation panel, which is client-owned and never submitted.
+      // `ctx.inject` callbacks may run again when dependencies change; the
+      // decoration must be registered exactly once or the catalog refresh loops.
+      let decorated = false;
+      const decorateCommand = (commandUi) => {
+        if (decorated) return;
+        decorated = true;
+        try {
+          commandUi.decorate({
+            name: 'mcp',
+            available: () => true,
+            ui: {
+              kind: 'action',
+              run: (session) => {
+                if (typeof session?.sessionId === 'string') openSessionPanel(session.sessionId);
+              },
+            },
+          });
+        } catch (error) {
+          /* the host row may not be in the catalog yet; the command still runs server-side */
+        }
+      };
+      if (typeof ctx.inject === 'function') ctx.inject(['commandUi'], (scope) => decorateCommand(scope.commandUi));
+      // Header entry next to the view tabs, so the panel is reachable without /mcp.
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: 'mcp-session-entry',
+        order: 40,
+        locale: NS,
+        inject: (sessionId) => ({ sessionId }),
+      }, McpHeaderEntry));
+      // The panel lives in the composer overlay so it tracks the active Session.
+      ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
+        name: 'conversation.input.overlay',
+        id: 'mcp-session-panel',
+        order: 50,
+        locale: NS,
+        inject: (sessionId) => ({ sessionId }),
+      }, McpSessionPanel));
       // Own one surface per activation: the local handle keeps this activation's
       // cleanup from disposing a later generation's surface.
       const surface = createRailSurface(ctx, t);

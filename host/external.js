@@ -19,7 +19,7 @@ import { ManagerError, buildServerRecord, validateServerInput } from './store.js
  * @param {(server: object) => void} dependencies.reconcile - Applies a migrated record to its connection.
  * @returns {{external: Function, setExternalEnabled: Function, takeover: Function}} external-entry operations.
  */
-export function createExternalOperations({ ctx, store, warn, enqueue, list, reconcile }) {
+export function createExternalOperations({ ctx, store, warn, enqueue, list, reconcile, autoInjectOf, adoptDefault }) {
   /** Resolve optional Cordis services without requiring a particular deployment. */
   function service(name) {
     try { return typeof ctx.get === 'function' ? ctx.get(name) : undefined; }
@@ -286,6 +286,8 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
         cwd: config.cwd,
         url: config.url,
         headers: config.headers,
+        // Migration carries the caller's default-injection preference across.
+        autoInject: autoInjectOf(entryId),
       };
       const current = store.list();
       // Migrating onto a name this page already manages replaces that record in
@@ -317,7 +319,12 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
         await waitForToolRelease(input.name, 3000);
       }
       try {
-        const next = existing === undefined
+        try {
+        await adoptDefault(entryId);
+      } catch (error) {
+        warn(`could not clear the external default for "${entryId}": ${error?.message ?? String(error)}`);
+      }
+      const next = existing === undefined
           ? [...current, record]
           : current.map((server) => (server.id === record.id ? record : server));
         await store.setServers(next);

@@ -613,7 +613,7 @@ async function main() {
     });
   });
 
-  await test('the twelve Fetch routes match the pinned paths and failure shape', async () => {
+  await test('the thirteen Fetch routes match the pinned paths and failure shape', async () => {
     const view = { id: 's1', name: 'alpha', status: 'ready', tools: [], toolCount: 0 };
     let railEntry = true;
     const manager = {
@@ -739,6 +739,8 @@ async function main() {
   // End-to-end: the real plugin against a minimal fake Cordis context.
   // ---------------------------------------------------------------------
   const effects = [];
+  /** Event listeners the plugin registers (agent lifecycle). */
+  const listeners = new Map();
   const routesByPath = new Map();
   const registeredTools = new Map();
   const logs = [];
@@ -752,6 +754,15 @@ async function main() {
       const dispose = body();
       effects.push({ label, dispose });
       return dispose;
+    },
+    on(event, listener) {
+      const list = listeners.get(event) ?? [];
+      list.push(listener);
+      listeners.set(event, list);
+      return () => {
+        const index = list.indexOf(listener);
+        if (index >= 0) list.splice(index, 1);
+      };
     },
     tools: {
       register(definition) {
@@ -773,6 +784,21 @@ async function main() {
     },
   };
 
+  /** One fake Agent whose scope shares this suite's tool registry. */
+  const fakeAgent = {
+    id: 'agent-smoke',
+    session: { id: 'session-smoke' },
+    ctx: {
+      tools: ctx.tools,
+      effect(body) {
+        return body();
+      },
+    },
+  };
+  const emit = (event, payload) => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener(payload);
+  };
+
   const call = async (routePath, body) => {
     const route = routesByPath.get(routePath);
     assert.ok(route !== undefined, `route ${routePath} is registered`);
@@ -792,13 +818,17 @@ async function main() {
   };
 
   let pluginServerId;
-  await test('apply registers the twelve routes on ctx.connection.fetch', () => {
+  await test('apply registers the thirteen routes on ctx.connection.fetch', () => {
     apply(ctx);
+    emit('agent/created', { agent: fakeAgent });
     assert.deepEqual(
       [...routesByPath.keys()].sort(),
       [...ROUTE_PATHS].sort(),
     );
-    assert.equal(effects.length, 2, 'lifecycle and routes effects are registered');
+    const labels = effects.map((entry) => entry.label);
+    for (const label of ['mcp-manager.lifecycle', 'mcp-manager.agents', 'mcp-manager.routes']) {
+      assert.ok(labels.includes(label), `${label} effect is registered`);
+    }
   });
 
   await test('the ui preference defaults to true and persists through /api/mcp-manager.ui', async () => {
