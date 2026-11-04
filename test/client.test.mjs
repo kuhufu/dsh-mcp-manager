@@ -27,6 +27,7 @@ function fixture() {
       return owner.hooks[index].value;
     },
     useCallback(fn, deps) { return this.useMemo(() => fn, deps); },
+    memo(component) { return component; },
     useEffect(fn, deps) {
       const owner = current, index = owner.cursor++, old = owner.hooks[index];
       if (!old || !deps || deps.some((value, i) => !Object.is(value, old.deps[i]))) {
@@ -240,7 +241,9 @@ test('closing and reopening the same session invalidates prior mutations and rea
   const panel = f.mount(f.api.McpSessionPanel, { t: f.t, sessionId: 'a' });
   f.requests[0].reply(sessionPayload('a', true)); await flush();
   panelControl(panel, f.t, 'external').props.onChange();
-  f.api.closeSessionPanel();
+  // Closing and reopening are separate interactions: the close must land as a
+  // render before the reopen, or React sees one unchanged `active` value.
+  f.api.closeSessionPanel(); panel.render();
   f.api.openSessionPanel('a'); panel.render();
   f.requests[2].reply(sessionPayload('a', false)); await flush();
   f.requests[1].reply(sessionPayload('a', true)); await flush();

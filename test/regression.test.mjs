@@ -509,6 +509,32 @@ test('saving cwd and timeout edits reconnects; default injection edits update at
   assert.equal(manager.list()[0].logs.filter((log) => log.message === 'Connecting').length, count);
 });
 
+test('a per-session override connects a default-off server on demand', async (t) => {
+  const { manager, tools } = await managerFixture(t);
+  const url = await http(t, (req, res, body) => {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+    if (body.method === 'initialize') {
+      return reply(res, body.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} } });
+    }
+    if (body.method === 'notifications/initialized') { res.writeHead(202); return res.end(); }
+    if (body.method === 'tools/list') return reply(res, body.id, { tools: [{ name: 'lazy-tool' }] });
+    return reply(res, body.id, { content: [] });
+  });
+  await manager.save({ server: { name: 'lazy', transport: 'http', url, autoInject: false } });
+  await until(() => manager.list()[0].status === 'stopped');
+  assert.equal(tools.size, 0, 'a default-off server never connects on its own');
+
+  const on = await manager.runCommand({ session: { id: 'session-test' } }, 'on lazy');
+  assert.equal(on.kind, 'success');
+  await until(() => manager.list()[0].status === 'ready');
+  await until(() => tools.has('mcp__lazy__lazy-tool'));
+  assert.equal(manager.sessionView('session-test').servers[0].visible, true);
+
+  await manager.runCommand({ session: { id: 'session-test' } }, 'off lazy');
+  await until(() => !tools.has('mcp__lazy__lazy-tool'));
+  await until(() => manager.list()[0].status === 'stopped');
+});
+
 const unrelatedAgent = (id) => ({ id, session: { id }, ctx: { tools: { register: () => () => {} }, effect() {} } });
 
 test('unrelated sessions and visibility changes do not interrupt an unchanged handshake', async (t) => {
