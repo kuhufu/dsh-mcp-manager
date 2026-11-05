@@ -211,6 +211,7 @@ configuration:
 - The panel also ships as a Session View: `ctx.slots.register({ name: 'conversation.view',
   id: 'mcp' })` puts an "MCP" tab beside Chat and Trajectory and renders the same rows as a
   full page. No Conversation target is registered; the View reads `api/mcp-manager.session`.
+  The View is the only header-level entry: there is no separate header action button.
 - Client data is a module-level snapshot behind `dataListeners`; one process-wide timer polls
   only while a server is connecting, and the stylesheet is injected once from `apply()`.
 - Command and panel reset both clear the Session's managed and external overrides in one

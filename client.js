@@ -2119,45 +2119,6 @@ window.__ModuleLoader__.load({
 `;
 
     /**
-     * Header entry that opens the same panel without typing a command.
-     * @param props - slot props; `sessionId` comes from the slot's `inject` hook.
-     * @returns the header button, or null without a Session.
-     */
-    function McpHeaderEntry(props) {
-      const t = React.useMemo(
-        () => (typeof props.t === 'function' ? props.t : directTranslator()),
-        [props.t],
-      );
-      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : props.session?.id;
-      if (typeof sessionId !== 'string') return null;
-      return h(
-        'button',
-        {
-          type: 'button',
-          title: t('sessionTitle'),
-          'aria-label': t('sessionTitle'),
-          onClick: () => openSessionPanel(sessionId),
-          style: {
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            height: '28px',
-            padding: '0 8px',
-            border: '0',
-            borderRadius: 'var(--dsw-radius-sm)',
-            background: 'transparent',
-            color: 'var(--dsw-alias-label-secondary)',
-            cursor: 'pointer',
-            font: 'inherit',
-            fontSize: '13px',
-          },
-        },
-        h(Icon, { name: 'server', size: 16 }),
-        h('span', null, t('nav')),
-      );
-    }
-
-    /**
      * Fetch and mutate one Session's MCP visibility for either surface.
      *
      * The effect is keyed by visibility and identity only: hiding the surface or
@@ -2899,14 +2860,6 @@ window.__ModuleLoader__.load({
         }
       };
       if (typeof ctx.inject === 'function') ctx.inject(['commandUi'], (scope) => decorateCommand(scope.commandUi));
-      // Header entry next to the view tabs, so the panel is reachable without /mcp.
-      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
-        name: 'conversation.session.header.actions',
-        id: 'mcp-session-entry',
-        order: 40,
-        locale: NS,
-        inject: (sessionId) => ({ sessionId }),
-      }, McpHeaderEntry));
       // `MCP` is a first-class Session View beside Chat and Trajectory. The View
       // contract carries id/label/order for the tab (tab labels are text-only, so
       // the server glyph lives in the page header) and needs no target snapshot
