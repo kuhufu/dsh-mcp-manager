@@ -2,247 +2,217 @@
 
 <img src="icon.svg" width="64" height="64" alt="dsh-mcp-manager icon">
 
-MCP server management for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
-manage **Model Context Protocol** servers from the Web UI and get their tools as native
-`mcp__<server>__<tool>` tools for the agent — no hand-editing of `cordis.patch.yml`, no restart.
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 增加 MCP 服务器管理：
+在界面里增删改查 **Model Context Protocol** 服务器，把它们的工具注册成模型可直接调用的
+`mcp__<服务器名>__<工具名>`，不用手改 `cordis.patch.yml`，也不用重启。
 
-[中文](README.zh.md) | English
+[English](README.en.md) | 中文
 
-## Features
+## 功能
 
-- **Two surfaces, one page.** Settings → **MCP servers** always exists; an optional left-rail
-  entry with this plugin's own icon opens the same page as a standalone panel. A switch at the
-  bottom of the page shows or hides the rail entry (default: shown).
-- **Full lifecycle from the UI.** Add, edit, enable/disable, reconnect and delete servers.
-  Saving connects immediately; disabling kills the child process and unregisters its tools;
-  reconnecting re-handshakes and swaps the tool set atomically.
-- **stdio and Streamable HTTP** transports, with environment variables, request headers and
-  working directory.
-- **Live status**: connected / connecting / failed (with the server's error text), tool count,
-  server version, instructions, and the discovered tool list.
-- **`/mcp` per-session switches.** Type `/mcp` in the composer for a panel that hides or shows
-  each server for the current session only; `/mcp on <server>`, `/mcp off <server>`,
-  `/mcp list` and `/mcp reset` do the same from the command line. Overrides persist per session
-  and never change the saved configuration. The same panel is available as an **MCP** tab next
-  to Chat and Trajectory. `dsh-mcp-client` entries appear in the same panel;
-  hiding one applies an agent-scoped `ctx.tools.restrict()` deny mask, so their globally
-  registered tools disappear for that session only.
-- **Default injection.** Turn off *Inject into every session by default* for a server with many
-  tools: it stays disconnected until a session enables it from `/mcp`. `dsh-mcp-client` rows
-  have the same switch, stored separately from their profile configuration.
-- **Foreign entries are visible, not duplicated.** MCP servers already configured as separate
-  `@deepseek-ai/dsh-mcp-client` rows appear with their Entry id and live tool count, and can be
-  switched on or off from this page without touching their configuration.
-  **Migrate here** moves one over: it disables the source row first, then copies the config into
-  this page and connects — so two connections never compete for the same tool names.
-- **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
-  atomic JSON persistence, and exact Fetch routes. No build step.
+- **两个入口，同一个页面**：**设置 → MCP 服务器** 始终存在；可选的左侧栏入口用本插件自己的
+  图标，打开的是同一个页面的独立面板。页面底部「在左侧栏显示入口」开关控制（默认开启）。
+- **界面里完成全部操作**：添加、编辑、启用/停用、重连、删除。保存即连接；停用会结束子进程并
+  撤掉该服务器的工具；重连重新握手并原子替换工具集。
+- **两种传输**：stdio（命令、参数、环境变量、工作目录）与 Streamable HTTP（URL、请求头）。
+- **按会话开关 `/mcp`**：在输入框输入 `/mcp` 打开面板，只对当前会话隐藏或显示某个服务器；
+  `/mcp on <服务器>`、`/mcp off <服务器>`、`/mcp list`、`/mcp reset` 提供等价的命令形式。
+  覆盖项按会话持久化，不会改动已保存的配置。同一份面板也作为「MCP」标签页出现在
+  对话/轨迹旁边。`dsh-mcp-client` 条目也会出现在面板里：
+  隐藏它们会在该 agent 上应用 `ctx.tools.restrict()` 的 deny 掩码，全局注册的工具只对当前会话消失。
+- **默认注入**：关闭某台服务器的「默认注入到每个会话」后，它默认不连接，直到某个会话在
+  `/mcp` 里按需开启，适合工具很多的服务器。`dsh-mcp-client` 条目有同名开关，偏好单独保存，
+  不改动 profile 配置。
+- **实时状态**：已连接 / 连接中 / 失败（带服务器报错原文）、工具数、服务器版本、instructions、
+  可展开的工具清单。
+- **外部条目可见、可开关、不重复连接**：已经在 `@deepseek-ai/dsh-mcp-client` 独立条目里配置的
+  服务器会列出来（入口 id + 实时工具数），可以在本页直接**启用/停用**（等同「设置 → 插件」里的
+  开关），也能一键迁移。点「迁到此页」会**先停用原条目**再把配置复制成
+  本页记录并连接，所以不会出现两条连接抢同一批工具名。
+- **连接选项与诊断**：握手、工具调用超时可分别设置；自动重连默认关闭，最多重试 10 次，
+  间隔逐次增加至 30 秒。展开详情可查看最近 50 条连接、工具刷新与调用结果记录，不记录调用参数或结果正文。
+- **工具管理**：显示实际注册名称，支持逐个启停；收到工具列表变化通知后自动刷新，保留停用选择。
+- **配置整理**：搜索、状态筛选、复制服务器，以及 JSON 批量导入导出。
+- **零依赖**：自带一个小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和
+  精确 Fetch 路由，无构建步骤。
 
-## Screenshots
+## 截图
 
-Settings → MCP servers: a live server with its status, endpoint, tool count and version, the
-dashed add row, and the sidebar-entry preference that controls the second surface.
+设置 → MCP 服务器：一台在线服务器的状态、端点、工具数与版本，内容末尾的虚线添加行，以及控制
+第二个入口的「在左侧栏显示入口」开关。
 
-<img src="docs/screenshots/settings.png" width="760" alt="MCP servers page in Settings">
+<img src="docs/screenshots/settings.png" width="760" alt="设置里的 MCP 服务器页面">
 
-The same page opened from the left rail — the rail icon is this plugin's own, and the page
-renders identically in both places.
+同一个页面从左栏打开——左栏图标是本插件自己的，两处渲染完全一致。
 
-<img src="docs/screenshots/rail-panel.png" width="880" alt="MCP servers page as a left-rail panel">
+<img src="docs/screenshots/rail-panel.png" width="880" alt="左侧栏面板里的 MCP 服务器页面">
 
-Adding a server takes either a command line (stdio) or a URL; both dialogs validate the tool
-namespace so two servers can never collide on `mcp__<name>__<tool>`.
+加一台服务器要么给一条命令行（stdio），要么给一个地址；两个弹窗都会校验工具命名空间，
+避免两台服务器在 `mcp__<名称>__<工具>` 上撞名。
 
-| Add a server (stdio) | Edit a server (HTTP) |
+| 添加服务器（stdio） | 编辑服务器（HTTP） |
 | --- | --- |
-| <img src="docs/screenshots/dialog-stdio.png" width="360" alt="Add MCP server dialog with stdio fields"> | <img src="docs/screenshots/dialog-http.png" width="420" alt="Edit MCP server dialog with URL and headers"> |
+| <img src="docs/screenshots/dialog-stdio.png" width="360" alt="添加 MCP 服务器弹窗（stdio 字段）"> | <img src="docs/screenshots/dialog-http.png" width="420" alt="编辑 MCP 服务器弹窗（URL 与请求头）"> |
 
 
-## Install
+## 安装
 
-Requires a Harness build that ships the Cordis Fetch-route and slot APIs used here
-(developed and tested against `0.2.1-rc.5`).
+需要一个提供 Cordis Fetch 路由与插槽 API 的 Harness 构建（开发与验证基于 `0.2.1-rc.5`）。
 
-### Web UI (desktop app or `dsh web`)
+### Web UI（桌面端或 `dsh web`）
 
-1. Open **Settings → Plugins → Add plugin**.
-2. Enter `@kuhufu/dsh-mcp-manager` and click **Install**.
-3. Confirm the bundle is enabled in the plugin list — installation and enablement are separate,
-   so an installed bundle that is switched off loads nothing.
+1. 打开 **设置 → 插件 → 添加插件**；
+2. 填 `@kuhufu/dsh-mcp-manager`，点 **安装**；
+3. 在插件列表里确认 bundle 已**启用**——安装和启用是两步，装好但没启用的 bundle 不会加载任何东西。
 
-For a Git checkout, use the CLI below instead of the wizard: it installs the directory as a
-link, so local edits apply on the next reload.
+从源码安装请改用下面的命令行：它会把目录作为 link 装进去，改动在重新加载后生效。
 
-### `dsh` CLI
+### `dsh` 命令行
 
 ```sh
-# install into a CLI profile (`web`, `tui`, or your own profile name); works once published
+# 安装到命令行 profile（web / tui / 你自己的 profile 名）；发布到 npm 后可用
 dsh plugin --profile web add @kuhufu/dsh-mcp-manager
 
-# update to the latest published version
+# 升级到已发布的最新版本
 dsh plugin --profile web update @kuhufu/dsh-mcp-manager@latest
 
-# uninstall
+# 卸载
 dsh plugin --profile web remove @kuhufu/dsh-mcp-manager
 ```
 
-Afterwards start the UI (`dsh web`) and enable the bundle in **Settings → Plugins** if it is not
-enabled yet. A checkout installs the same way:
+装完启动 UI（`dsh web`），如果 bundle 还没启用，到 **设置 → 插件** 里打开。从源码安装同理：
 
 ```sh
 git clone https://github.com/kuhufu/dsh-mcp-manager.git
-dsh plugin --profile web add ./dsh-mcp-manager   # relative paths resolve from your shell's cwd
+dsh plugin --profile web add ./dsh-mcp-manager   # 相对路径按 shell 当前目录解析
 ```
 
-### Desktop app profile
+### 桌面端 profile
 
-The desktop app owns the `desktop` profile. Open the app once so the profile exists, **fully
-quit** it, then run:
+桌面应用独占 `desktop` 这个 profile：先打开一次应用让 profile 初始化，然后**完全退出**应用，再执行
 
 ```sh
 dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 ```
 
-and start the app again. Running the plugin command while the app is up can race its profile
-lock.
+最后重新打开应用。应用运行期间跑插件命令可能和它的 profile 锁竞争。
 
-> The npm name `dsh-mcp-manager` belongs to an unrelated project, so this plugin publishes under
-> the `@kuhufu` scope. Until it is published there, install from a Git checkout as shown above.
+> npm 上的 `dsh-mcp-manager` 属于另一个无关项目，所以本插件发布在 `@kuhufu` scope 下。
+> 在它发布到 npm 之前，按上面的方式从 Git 检出安装。
 
-## Usage
+## 使用
 
-| Action | What happens |
+| 操作 | 说明 |
 | --- | --- |
-| Add server | Pick a transport, fill the fields, save. The connection is opened right away. |
-| Enable / disable | Disabling ends the child process and removes the server's tools; the config stays. |
-| Reconnect | New handshake and a fresh tool generation (use after changing env vars or upgrading the server). |
-| Edit | Saves and restarts that connection; renaming changes the tool namespace. |
-| Delete | Disconnects, unregisters the tools, removes the record (inline confirmation). |
-| Show in the sidebar | Installs or removes the left-rail entry; the Settings page is unaffected. |
-| Switch a `dsh-mcp-client` row | Enables or disables that row — the same effect as Settings → Plugins, without leaving the page. A row whose name is already managed here is marked **Managed here** and its switch is locked, since enabling both would collide on tool names. |
+| 添加服务器 | 选传输方式填参数后保存；保存即连接，工具立刻出现 |
+| 启用 / 停用 | 停用会结束子进程并移除该服务器的工具，配置保留 |
+| 重连 | 重新握手并重建工具集（改完环境变量或服务器升级后用） |
+| 编辑 | 改配置后自动重启该连接；名称变更会换工具命名空间 |
+| 删除 | 断连 + 移除工具 + 删除记录（行内二次确认） |
+| 在左侧栏显示入口 | 安装/移除左侧栏入口；设置里的页面不受影响 |
+| 外部条目开关 | 直接启用/停用某条 `dsh-mcp-client` 配置，效果等同「设置 → 插件」；同名记录已被本页管理时标为「已在本页管理」并锁住开关，避免两边抢工具名 |
 
-**Tool naming.** Tools are registered as `mcp__<serverName>__<rawToolName>`, with every character
-outside `[A-Za-z0-9_-]` replaced by `_` (so `mix.content` becomes `mcp__mix_content`). An MCP
-`isError` result fails the call with the server's text. Re-syncing (or restarting) a server swaps
-the whole tool set atomically.
+**工具命名**：`mcp__<服务器名>__<原始工具名>`，非法字符替换为 `_`（如 `mix.content` →
+`mcp__mix_content`）。MCP 返回 `isError` 时调用失败并带出服务器文本；重连或重启会原子替换整批工具。
 
-**Transports.**
+**传输**：
 
-- `stdio`: `command`, `args`, `env`, optional `cwd` — e.g. `command: npx`,
-  `args: -y @modelcontextprotocol/server-filesystem /tmp`.
-- `http` (Streamable HTTP): `url` and optional `headers` such as `Authorization: Bearer …`.
+- `stdio`：`command` + `args` + `env`（+ 可选 `cwd`），例如
+  `command: npx`、`args: -y @modelcontextprotocol/server-filesystem /tmp`。
+- `http`（Streamable HTTP）：`url` + 可选 `headers`（如 `Authorization: Bearer …`）。
 
-## Data and security
+## 数据与安全
 
-- Records live in `$DSH_HOME/storages/mcp-manager.json` (`$DSH_HOME` defaults to `~/.dsh`);
-  per-session `/mcp` overrides live in `storages/mcp-manager-sessions.json` beside it,
-  written atomically with `0600` permissions. External-entry default-injection preferences live
-  in `storages/mcp-manager-external.json`; only entries turned off are recorded there, so the
-  profile remains the source of truth for the entries themselves. Memory is committed only after
-  persistence succeeds. The previous valid document is retained in `.bak`.
-- Corrupt, unreadable, or unsupported-version documents lock writes and offer backup restoration
-  or reset. Either action archives the original bytes in `.recovery-<time>-<uuid>`. Legacy
-  documents without `version` or `ui` remain readable and migrate on the next write.
-- Invalid or duplicate individual records are skipped with warnings; valid servers remain usable.
-  The original document is archived before the next write.
-- Environment variables and headers are stored there as **plain text**. If a migrated
-  `dsh-mcp-client` row used `!!js process.env.X`, the copy holds the resolved value.
-- MCP servers are ordinary processes started as your user; this plugin adds no sandbox.
-  Only add servers you trust.
+- 配置存放在 `$DSH_HOME/storages/mcp-manager.json`（`$DSH_HOME` 默认 `~/.dsh`）；按会话的
+  `/mcp` 覆盖项存放在同目录的 `mcp-manager-sessions.json`，原子写入，
+  读取时校验。外部条目的默认注入偏好存放在同目录的 `mcp-manager-external.json`，只记录被关闭
+  的条目，条目本身仍以 profile 配置为准。写入成功后才更新内存，文件权限为 `0600`；上一次有效
+  配置保存在同目录 `.bak` 文件。
+- 文件损坏、无法读取或版本不支持时，页面进入只读恢复状态，阻止覆盖原配置。可选择恢复备份或使用空配置，
+  操作前均会把原文件归档为 `.recovery-<时间戳>-<uuid>`。旧版缺少 `version` 或 `ui` 的文档仍可读取并升级。
+- 单条无效或重复记录会跳过并提示，其余有效服务器仍可使用；下次保存前会先归档原文件。
+- 环境变量和请求头以**明文**保存。若被接管的 `dsh-mcp-client` 条目用了
+  `!!js process.env.X`，复制过来的是求值后的真实值。
+- MCP 服务器是以你的用户身份启动的普通进程，本插件不额外加沙箱；只添加可信的服务器。
 
-## Architecture
+## 结构
 
-| Part | File | Role |
+| 部分 | 文件 | 职责 |
 | --- | --- | --- |
-| Host | `index.js` + `host/manager.js`, `runtime.js`, `agents.js`, `external.js`, `external-defaults.js`, `session-state.js`, `profile-patch.js`, `patch-repair.js`, `mcp.js`, `store.js`, `routes.js` | Owns records, MCP connections, tool registration and the Fetch routes. |
-| Client | `client.js` | One React page registered into `settings.section`, plus the optional `sidebar.panellist` + `main` pair. |
+| Host | `index.js` + `host/manager.js`、`runtime.js`、`agents.js`、`external.js`、`external-defaults.js`、`session-state.js`、`profile-patch.js`、`patch-repair.js`、`mcp.js`、`store.js`、`routes.js` | 记录、MCP 连接、工具注册与 Fetch 路由 |
+| Client | `client.js` | 一个 React 页面，注册进 `settings.section`；可选再注册 `sidebar.panellist` + `main` |
 
-All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
-`api/mcp-manager.*`, authenticated by the browser session, `cache-control: no-store`):
+页面通信全部走 Harness Fetch 桥上的精确 `POST` 路由（相对路径 `api/mcp-manager.*`，由浏览器
+会话鉴权，`cache-control: no-store`）：
 
-| Route | Purpose |
+| 路由 | 用途 |
 | --- | --- |
-| `list` | Managed servers + read-only `external` rows + `ui` |
-| `save` / `remove` / `toggle` / `reconnect` | Server mutations |
-| `takeover` | Disable a `dsh-mcp-client` entry and re-create it as a managed record |
-| `toggle-external` | Enable or disable a `dsh-mcp-client` entry |
-| `external-default` | A `dsh-mcp-client` entry's default-injection preference |
-| `repair-patch` | Move duplicate home-patch inserts into the profile patch |
-| `ui` | The `railEntry` preference |
-| `session` / `session-set` | A session's visibility overrides (`/mcp`) |
-| `import` / `export` | Atomic batch import and credential-optional export |
-| `recover` | Archive the original and restore a backup or reset |
-| `tool` | Enable or disable a raw tool name |
+| `list` | 本页管理的服务器 + 只读 `external` 行 + `ui` |
+| `save` / `remove` / `toggle` / `reconnect` | 服务器增删改与连接控制 |
+| `takeover` | 停用一条 `dsh-mcp-client` 条目并重新建成本页记录 |
+| `toggle-external` | 启用/停用某条 `dsh-mcp-client` 条目 |
+| `external-default` | 某条 `dsh-mcp-client` 条目的默认注入偏好 |
+| `repair-patch` | 把 home patch 里重复声明的条目移入 profile patch |
+| `ui` | `railEntry` 偏好 |
+| `import` / `export` | 批量导入、导出配置 |
+| `recover` | 归档原文件并恢复备份或重置 |
+| `tool` | 按原始工具名启停 |
 
-`CONTRACT.md` pins the request/response shapes, validation rules and tool-bridge contract.
+请求/响应结构、校验规则和工具桥接契约见 [CONTRACT.md](CONTRACT.md)。
 
-## Development
+## 开发
 
-Plain ESM, no build step or runtime dependencies. Node 22+. The Node suites use built-ins;
-the optional browser suite has separate development-only dependencies.
+纯 ESM，无构建步骤、无运行时依赖，Node 22+。Node 测试只使用内置模块；浏览器测试另需开发依赖。
 
 ```bash
-npm run check
-npm test
+npm run check         # 检查所有源码、脚本和测试的语法
+npm test              # 四套既有测试 + 后端、前端状态回归测试
 npm run test:regression
-npm run test:browser  # after preparing the environment in test/BROWSER.md
+npm run test:browser   # 完成 test/BROWSER.md 中的开发环境准备后运行
 ```
 
-The four smoke suites contain 29 / 93 / 8 / 23 checks, plus 26 Node regression cases.
-Tests exercise real stdio/HTTP transports, lifecycle cleanup, failed writes, recovery, cancellation,
-dynamic tools and frontend response ordering. See [test/BROWSER.md](test/BROWSER.md) for the isolated
-browser interaction suite; no Harness installation or plugin activation is needed.
+四套 smoke 分别包含 29 / 93 / 8 / 23 项检查；另有 26 项 Node 回归用例。
+测试使用真实 stdio/HTTP 传输和假 MCP 服务，覆盖进程回收、取消、持久化失败、恢复、动态工具及页面竞态。
+浏览器交互测试的隔离运行方式见 [test/BROWSER.md](test/BROWSER.md)，无需安装或启用 Harness 插件。
 
-## Connection and configuration options
+## 导入、导出与复制
 
-- Set handshake and tool timeouts separately. Automatic reconnect defaults to off, with a limit
-  of 0–10 retries and exponential intervals capped at 30 seconds. Manual reconnect resets the budget.
-- Expand a server to see actual public tool names, toggle individual tools, and inspect the last
-  50 connection/refresh/call events. Tool arguments and result bodies are excluded from activity.
-  Tool-list change notifications refresh the catalog while preserving disabled selections.
-- Search/filter servers, or duplicate a server into an editable, uniquely named disabled draft.
-- Import a server array, `{ version: 1, servers: [...] }`, or `{ mcpServers: { name: config } }`.
-  Each batch contains 1–200 records, is validated atomically, rejects duplicate names, and imports
-  every server disabled. Fill missing credentials before enabling it.
-- Export omits environment variables and headers unless explicitly included. Command arguments
-  and URLs remain in exports and can themselves contain credentials.
+在页面末尾的侧栏偏好行上方展开「导入 / 导出配置」，可以粘贴 JSON 或读取文件。支持服务器数组、带 `servers` 的导出文档，
+以及常见的 `{ "mcpServers": { "名称": { "command": "…" } } }` 格式，每批最多 200 台。
+整批校验通过才会保存；名称冲突会拒绝整批导入，导入的服务器均保持停用，补全配置后再手动启用。
 
-## Troubleshooting
+导出默认去掉环境变量和请求头，勾选「包含环境变量和请求头」才会写入这些明文值。
+命令参数和 URL 始终保留，其中若包含凭据，也会进入导出文件。服务器行的复制按钮会打开一个名称不重复、
+默认停用的草稿，确认保存后才创建新记录。
 
-**`Connection failed — tool "mcp__X__y" is already registered`**
-Another MCP connection already owns that tool name, usually a `@deepseek-ai/dsh-mcp-client` row
-with the same `serverName`. Do not add a second copy by hand: open the read-only
-"Configured as dsh-mcp-client entries" list and press **Migrate here**. It disables the source
-row first, waits for its tools to be released, and only then connects — so the two connections
-never compete. Migrating onto a name this page already manages replaces that record in place
-(the id is kept), which is the way to repair a row that is stuck in this error state. If the
-conflicting server is not in the list, find and disable its entry under Settings → Plugins
-first, then reconnect this row.
+## 常见问题
 
-**The page is missing after installing** — install and enable are two steps. Enable the bundle in
-Settings → Plugins, then reload the window.
+**`连接失败 — tool "mcp__X__y" is already registered`**
+说明同一批工具名已被另一条 MCP 连接占用，通常是同名 `serverName` 的
+`@deepseek-ai/dsh-mcp-client` 条目。不要手动再加一份：在下方只读的「通过 dsh-mcp-client
+配置的服务器」里点 **迁到此页**——它会先停用原条目、等旧工具释放完再连接，两条连接不会抢名字。
+如果本页已经有同名记录（比如卡在报错状态的那条），迁移会**原地替换**它并保留 id，所以直接再点
+一次「迁到此页」就能修好。如果冲突的服务器不在这个列表里，先到「设置 → 插件」找到并停用它的
+条目，再回来点重连。
 
-**A `dsh-mcp-client` switch does nothing / the row stays enabled** — the row is declared more than
-once in the profile patch: a `disabled: true` override sitting *before* a later `insert` of the same
-id is updated in place by the Plugin Manager, while the later insert keeps winning. The plugin
-repairs that shape itself: it drops the stale override-only rows, keeps the declaration that carries
-the configuration, appends a final `disabled` row so the last declaration wins, and leaves a
-`cordis.patch.yml.bak-<timestamp>` backup beside the patch. Other duplicate shapes are refused with
-the `overridden` error rather than guessed at.
+**装完看不到页面**——安装和启用是两步：先在「设置 → 插件」里启用 bundle，然后刷新窗口。
 
-**The Settings navigation icon is a gear** — the Harness shell maps navigation icons by section id,
-so a third-party Settings section always gets the fallback gear. This plugin's own icon is the
-left-rail entry; the preference switch at the bottom of the page controls it.
+**外部条目的开关点了没反应 / 一直是启用状态**——这条配置在 profile patch 里被声明了两次：一个
+`disabled: true` 的覆盖行写在同 id 的 `insert` **之前**，插件管理只会原地改那个覆盖行，后面的
+insert 仍然生效。插件现在会自己修：删掉那条只含 `id`/`disabled` 的过期覆盖行，保留带配置的
+声明，并在文件末尾补一条决定性的 `disabled` 行（最后声明生效），同时在 patch 旁留一份
+`cordis.patch.yml.bak-<时间戳>` 备份。其它重复形态不会硬猜，仍然返回 `overridden`。
 
-## Limitations
+**设置导航里是齿轮图标**——宿主按 section id 映射导航图标，第三方设置页只能是回退的齿轮图标；
+本插件自己的图标在左侧栏入口上，由页面底部的开关控制。
 
-- MCP image/audio results are not persisted; non-text blocks are surfaced as text diagnostics.
-- MCP prompts/resources subscriptions are not supported (matching the official
-  `dsh-mcp-client` bridge).
-- A cross-server tool-name collision (e.g. server `a__b` + tool `c` vs server `a` + tool `b__c`)
-  fails that server's registration with an error status rather than renaming silently.
-- The Settings navigation icon for third-party sections is fixed by the Harness shell (a gear);
-  the rail entry is where this plugin's own icon is visible.
+## 已知边界
+
+- 不支持 MCP 图片/音频结果的持久化，非文本块以文字说明呈现。
+- 不支持 MCP prompts 模板与 resources 订阅（与官方 `dsh-mcp-client` 的限制一致）。
+- 服务端工具名跨服务器撞名（如服务器 `a__b`+工具 `c` 与服务器 `a`+工具 `b__c`）会使该服务器
+  注册失败并显示错误态，而不是自动改名。
+- 设置导航里第三方页面的图标由宿主固定为齿轮，无法自定义；本插件自己的图标体现在左侧栏入口上。
 
 ## License
 
