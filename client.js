@@ -191,7 +191,7 @@ window.__ModuleLoader__.load({
       sessionTitle: 'MCP servers for this session',
       sessionHint: 'Only this session is affected; the saved configuration is unchanged.',
       sessionReset: 'Reset to the global configuration',
-      sessionEmpty: 'No MCP servers are configured yet.',
+      sessionEmpty: 'No MCP servers yet.',
       sessionLoading: 'Loading servers…',
       sessionToggle: 'Toggle {name} for this session',
       sessionHidden: 'Hidden here',
@@ -338,7 +338,7 @@ window.__ModuleLoader__.load({
       sessionTitle: '本会话的 MCP 服务器',
       sessionHint: '只影响当前会话，不会改动已保存的配置。',
       sessionReset: '恢复全局配置',
-      sessionEmpty: '还没有配置任何 MCP 服务器。',
+      sessionEmpty: '还没有 MCP 服务器。',
       sessionLoading: '正在加载服务器…',
       sessionToggle: '为当前会话开关 {name}',
       sessionHidden: '本会话已隐藏',
@@ -2096,7 +2096,8 @@ window.__ModuleLoader__.load({
 .dshmcp-session-head{display:flex;align-items:flex-start;gap:8px}
 .dshmcp-session-titles{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
 .dshmcp-session-title{margin:0;font-size:14px;font-weight:600;line-height:20px}
-.dshmcp-session-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dshmcp-session-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.dshmcp-session-empty{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-quaternary)}
 .dshmcp-session-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}
 .dshmcp-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:40vh;overflow-y:auto;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2)}
 .dshmcp-session-row{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 10px;border-top:.5px solid var(--dsw-alias-border-l1)}
@@ -2122,8 +2123,7 @@ window.__ModuleLoader__.load({
 .dshmcp-session-page .dshmcp-session-subtitle{font-size:13px;line-height:20px;margin-top:4px}
 .dshmcp-session-page .dshmcp-session-section{border-top:0;padding-top:24px;margin-top:0;gap:6px}
 .dshmcp-session-page .dshmcp-session-badge{border:0;padding:0;color:var(--dsw-alias-label-tertiary)}
-.dshmcp-session-page .dshmcp-session-hint{color:var(--dsw-alias-label-tertiary)}
-.dshmcp-session-page .dshmcp-session-foot{padding-top:12px}
+.dshmcp-session-page .dshmcp-session-page .dshmcp-session-foot{padding-top:12px}
 `;
 
     /**
@@ -2226,7 +2226,7 @@ window.__ModuleLoader__.load({
         state === null
           ? h('p', { className: 'dshmcp-session-hint' }, t('sessionLoading'))
           : state.servers.length === 0
-            ? h('p', { className: 'dshmcp-session-hint' }, t('sessionEmpty'))
+            ? h('p', { className: 'dshmcp-session-empty' }, t('sessionEmpty'))
             : h(
                 'ul',
                 { className: 'dshmcp-session-list' },
