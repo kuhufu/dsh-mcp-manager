@@ -2098,8 +2098,10 @@ window.__ModuleLoader__.load({
 .dshmcp-session-title{margin:0;font-size:14px;font-weight:600;line-height:20px}
 .dshmcp-session-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .dshmcp-session-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}
-.dshmcp-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:40vh;overflow-y:auto}
-.dshmcp-session-row{display:flex;align-items:center;gap:8px;min-height:32px}
+.dshmcp-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:40vh;overflow-y:auto;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2)}
+.dshmcp-session-row{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 10px;border-top:.5px solid var(--dsw-alias-border-l1)}
+.dshmcp-session-row:first-child{border-top:0}
+.dshmcp-session-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dshmcp-session-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dshmcp-session-status{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dshmcp-session-section{display:flex;flex-direction:column;gap:4px;padding-top:8px;border-top:.5px solid var(--dsw-alias-border-l2)}
