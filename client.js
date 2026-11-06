@@ -2109,9 +2109,8 @@ window.__ModuleLoader__.load({
 .dshmcp-session-panel .dshmcp-switch:disabled{opacity:.5}
 .dshmcp-session-page{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow-y:auto;padding:24px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}
 .dshmcp-session-wrap{display:flex;flex-direction:column;gap:12px;max-width:760px;margin:0 auto}
-.dshmcp-session-glyph{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);flex:none}
-.dshmcp-session-page .dshmcp-session-head{align-items:center}
-.dshmcp-session-page .dshmcp-session-title{font-size:16px;line-height:24px}
+.dshmcp-session-page .dshmcp-session-head{align-items:flex-start;gap:0}
+.dshmcp-session-page .dshmcp-session-title{font-size:14px;line-height:20px;font-weight:600}
 .dshmcp-session-page .dshmcp-session-list{max-height:none;overflow:visible}
 .dshmcp-session-page .dshmcp-session-list{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);overflow:hidden}
 .dshmcp-session-page .dshmcp-session-row{min-height:48px;padding:0 14px;border:0;border-top:.5px solid var(--dsw-alias-border-l1);border-radius:0;background:transparent;gap:10px}
@@ -2379,7 +2378,6 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dshmcp-session-head' },
-            h('span', { className: 'dshmcp-session-glyph', 'aria-hidden': 'true' }, h(Icon, { name: 'server', size: 18 })),
             h(
               'div',
               { className: 'dshmcp-session-titles' },
