@@ -11,6 +11,7 @@ import { repairPatchLayers } from './patch-repair.js';
 import { createRuntime } from './runtime.js';
 import { serverView } from './routes.js';
 import { createExternalDefaults } from './external-defaults.js';
+import { normalizeMcpJsonDocument } from './mcp-json.js';
 import { createSessionState } from './session-state.js';
 import {
   ManagerError,
@@ -302,6 +303,45 @@ export function createMcpManager({ ctx, logger }) {
       }
       await store.setServers(next);
       return { servers: list(), imported: inputs.length };
+    });
+  }
+
+  /**
+   * Import a third-party MCP configuration document directly.
+   *
+   * Unlike {@link importServers}, which stores this plugin's own export as
+   * disabled drafts, this reads the shapes other clients write (`mcpServers`,
+   * a VS Code `servers` object, a bare map) and connects what the caller asked
+   * to enable. One batch is one write: entries that cannot be imported are
+   * reported in `warnings`, never persisted.
+   *
+   * @param {{ document: unknown, enable?: boolean }} payload - route payload;
+   *   `enable` defaults to true and only decides the default for entries whose
+   *   source does not itself say `disabled: true`.
+   * @returns {Promise<{ servers: object[], imported: number, enabled: number, warnings: object[] }>}
+   *   fresh views and the normalization report.
+   */
+  function importMcpJson(payload) {
+    return enqueue(async () => {
+      await store.load();
+      if (payload.enable !== undefined && typeof payload.enable !== 'boolean') {
+        throw new ManagerError('invalid', 'enable must be a boolean', 'enable');
+      }
+      const result = normalizeMcpJsonDocument(payload.document, {
+        servers: store.list(),
+        enable: payload.enable !== false,
+      });
+      const next = [...store.list(), ...result.entries.map((entry) => buildServerRecord(entry))];
+      await store.setServers(next);
+      // Imported servers may be enabled: bring their connections up now so the
+      // page never shows an "enabled but never started" row.
+      applyDesired();
+      return {
+        servers: list(),
+        imported: result.entries.length,
+        enabled: result.enabled,
+        warnings: result.warnings,
+      };
     });
   }
 
@@ -611,6 +651,7 @@ export function createMcpManager({ ctx, logger }) {
     storage: store.status,
     recoverStorage,
     importServers,
+    importMcpJson,
     exportServers,
     setToolEnabled,
     external: externalView,

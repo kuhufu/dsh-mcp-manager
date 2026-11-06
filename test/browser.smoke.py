@@ -72,9 +72,53 @@ try:
         page.get_by_label('JSON 配置',exact=True).fill(json.dumps({'mcpServers':{'imported':{'command':'node'}}}))
         page.get_by_role('button',name='导入为停用的服务器').click()
         expect(page.get_by_role('status')).to_contain_text('已导入 1 个服务器')
+        # Direct MCP JSON import: JSONC comments, a name the namespace grammar
+        # cannot keep, one legacy-SSE entry that must be reported, and immediate
+        # connection of what was imported.
+        page.get_by_role('button',name='导入 MCP JSON',exact=True).first.click()
+        dialog=page.get_by_role('dialog')
+        expect(dialog.get_by_label('JSON 配置',exact=True)).to_be_focused()
+        dialog.get_by_label('JSON 配置',exact=True).fill(
+            '{\n  // Claude Desktop / Cursor style\n  "mcpServers": {\n'
+            '    "Direct Server": { "command": "node", "args": ["' + os.path.abspath('test/fake-server.mjs') + '"], },\n'
+            '    "sse-only": { "type": "sse", "url": "https://example.com/sse" },\n  },\n}')
+        expect(dialog.get_by_text('识别到 2 个服务器')).to_be_visible()
+        dialog.get_by_role('button',name='导入并启用',exact=True).click()
+        expect(dialog.get_by_role('status')).to_contain_text('已导入 1 个服务器，其中 1 个已启用')
+        expect(dialog.get_by_text('已跳过“sse-only”')).to_be_visible()
+        dialog.get_by_role('button',name='完成',exact=True).click()
+        expect(dialog).not_to_be_visible()
+        expect(page.get_by_role('button',name='编辑 Direct-Server',exact=True)).to_be_visible()
+        expect(page.locator('.dshmcp-row',has_text='Direct-Server').locator('.dshmcp-state[data-state=ready]')).to_be_visible(timeout=10000)
+        # VS Code style `servers` object, imported as a disabled draft when the
+        # "enable immediately" switch is off.
+        page.get_by_role('button',name='导入 MCP JSON',exact=True).first.click()
+        dialog=page.get_by_role('dialog')
+        dialog.get_by_label('JSON 配置',exact=True).fill(json.dumps({'inputs':[{'id':'token','type':'promptString'}],'servers':{'vscode-style':{'type':'stdio','command':'node'}}}))
+        dialog.get_by_role('checkbox',name='导入后立即启用并连接').uncheck()
+        dialog.get_by_role('button',name='导入为停用',exact=True).click()
+        expect(dialog.get_by_role('status')).to_contain_text('已导入 1 个服务器，其中 0 个已启用')
+        dialog.get_by_role('button',name='完成',exact=True).click()
+        expect(page.locator('.dshmcp-row',has_text='vscode-style').locator('.dshmcp-state')).to_have_text('已停用')
         rail=page.get_by_role('switch',name='在左侧栏显示入口',exact=True)
         rail.click();expect(rail).to_have_attribute('aria-checked','false')
         rail.click();expect(rail).to_have_attribute('aria-checked','true')
+        # The themed file picker replaces the native control: a hidden input
+        # still takes the file and the row shows its name.
+        page.get_by_role('button',name='导入 MCP JSON',exact=True).first.click()
+        dialog=page.get_by_role('dialog')
+        dialog.locator('input[type=file]').set_input_files({'name':'cursor-mcp.json','mimeType':'application/json','buffer':b'{"mcpServers":{"from-file":{"command":"node"}}}'})
+        expect(dialog.get_by_text('cursor-mcp.json')).to_be_visible()
+        expect(dialog.get_by_text('识别到 1 个服务器')).to_be_visible()
+        page.keyboard.press('Escape');expect(dialog).not_to_be_visible()
+        # The import dialog must stay inside a 320 px viewport too.
+        page.set_viewport_size({'width':320,'height':900})
+        page.get_by_role('button',name='导入 MCP JSON',exact=True).first.click()
+        dialog=page.get_by_role('dialog')
+        dialog.get_by_label('JSON 配置',exact=True).fill(json.dumps({'mcpServers':{'a-very-long-server-name-that-needs-normalizing':{'command':'node','args':['a-long-argument']}}}))
+        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth + 1')
+        page.keyboard.press('Escape');expect(dialog).not_to_be_visible()
+        page.set_viewport_size({'width':1024,'height':900})
         for width in [320,768,1024,1440]:
             page.set_viewport_size({'width':width,'height':900})
             page.screenshot(path=f'.qa/width-{width}.png',full_page=True)
@@ -90,7 +134,7 @@ try:
         page.get_by_role('button', name='恢复上一次备份', exact=True).click()
         expect(page.get_by_text('配置无法读取。为保留原文件，当前已锁定修改。')).not_to_be_visible()
         assert not errors, errors
-        print('Browser checks passed: CRUD, options, copy, filtering, tools, import/export, recovery, sidebar, focus, 4 widths; no React errors')
+        print('Browser checks passed: CRUD, options, copy, filtering, tools, import/export, direct MCP JSON import, recovery, sidebar, focus, 4 widths; no React errors')
         browser.close()
 finally:
     server.terminate()

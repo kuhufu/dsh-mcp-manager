@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
       sessionSet: 'api/mcp-manager.session-set',
       externalDefault: 'api/mcp-manager.external-default',
       import: 'api/mcp-manager.import',
+      importJson: 'api/mcp-manager.import-json',
       export: 'api/mcp-manager.export',
       recover: 'api/mcp-manager.recover',
       tool: 'api/mcp-manager.tool',
@@ -78,18 +79,48 @@ window.__ModuleLoader__.load({
       exportConfig: "Export configuration",
       includeSecrets: "Include environment variables and request headers",
       secretsHint: "Exports with this option contain credentials in plain text. Store them carefully.",
-      importHint: "Paste a servers array, an exported document, or an mcpServers object. Existing names are rejected. Imported servers remain disabled until you enable them.",
+      importHint: "Paste this page's own export or a servers array. For a Claude Desktop, Cursor or VS Code config use “Import MCP JSON” instead: it normalizes names and connects at once. Existing names are rejected here, and imported servers stay disabled.",
       importPreview: "{count} server(s) in this document",
       jsonInvalid: "Enter valid JSON.",
       importDone: "Imported {count} disabled server(s).",
       download: "Download JSON",
       chooseFile: "Load JSON file",
+      noFileChosen: "No file selected — you can also drop one here.",
       storageProblem: "Configuration could not be loaded. Changes are locked to preserve the original file.",
       restoreBackup: "Restore previous backup",
       resetStorage: "Start with an empty configuration",
       recoverConfirm: "Continue? The current file will be archived before recovery.",
       refreshStatus: "Refresh status",
       exportHint: "Environment variables and headers are omitted by default. Refill them before enabling imported servers.",
+      importMcpTitle: "Import MCP JSON",
+      importMcpHint: "Paste the MCP configuration of Claude Desktop, Claude Code, Cursor or VS Code. Comments and trailing commas are allowed; every server imports in one batch and the switch below decides whether they connect right away.",
+      importMcpReadOnly: "The configuration is locked until it is recovered, so importing is disabled.",
+      importMcpParseError: "This is not valid JSON or JSONC.",
+      importMcpEmpty: "No MCP servers recognized yet.",
+      importMcpCount: "{count} server(s) recognized",
+      importMcpMore: "{count} more…",
+      importMcpEnable: "Enable and connect immediately",
+      importMcpActionOn: "Import and enable",
+      importMcpActionOff: "Import as disabled",
+      importMcpWorking: "Importing…",
+      importMcpDone: "Imported {count} server(s); {enabled} enabled.",
+      importMcpDoneAction: "Done",
+      importUnknownShort: "?",
+      importRenamed: "Renamed “{from}” → “{to}”",
+      importSkipped: "Skipped “{name}”: {reason}",
+      importNote: "“{name}”: {reason}",
+      importReasonSse: "the legacy SSE transport is not supported; use Streamable HTTP",
+      importReasonCommand: "no command was given",
+      importReasonUrl: "no URL was given",
+      importReasonInvalidUrl: "the URL must start with http:// or https://",
+      importReasonTransport: "neither a command nor a URL was given",
+      importReasonEntry: "the entry is not a server object",
+      importReasonUnknownTransport: "unrecognized transport; inferred from the fields",
+      importReasonSourceDisabled: "marked disabled in the source configuration",
+      importReasonEnvFile: "envFile is not read; refill those environment values manually",
+      importReasonPlaceholder: "contains a ${input:…} placeholder that must be filled in",
+      importReasonDropped: "some args/environment/header values were dropped",
+      importReasonUnknown: "an unrecognized problem",
 
       nav: 'MCP servers',
       title: 'MCP servers',
@@ -227,18 +258,48 @@ window.__ModuleLoader__.load({
       exportConfig: "导出配置",
       includeSecrets: "包含环境变量和请求头",
       secretsHint: "勾选后，导出的文件会包含明文凭据，请妥善保存。",
-      importHint: "粘贴服务器数组、导出的配置或 mcpServers 对象。名称重复时整批拒绝，导入后需手动启用。",
+      importHint: "粘贴本页导出的配置或服务器数组。Claude Desktop、Cursor、VS Code 的配置请改用“导入 MCP JSON”：会自动规范名称并立即连接。这里名称重复时整批拒绝，导入后需手动启用。",
       importPreview: "文档包含 {count} 个服务器",
       jsonInvalid: "请输入有效的 JSON。",
       importDone: "已导入 {count} 个服务器，当前均已停用。",
       download: "下载 JSON",
       chooseFile: "读取 JSON 文件",
+      noFileChosen: "未选择文件，也可以直接把文件拖到这里。",
       storageProblem: "配置无法读取。为保留原文件，当前已锁定修改。",
       restoreBackup: "恢复上一次备份",
       resetStorage: "使用空配置重新开始",
       recoverConfirm: "确认继续？恢复前会先归档当前文件。",
       refreshStatus: "刷新状态",
       exportHint: "默认不导出环境变量和请求头；导入后请补全这些字段再启用。",
+      importMcpTitle: "导入 MCP JSON",
+      importMcpHint: "粘贴 Claude Desktop、Claude Code、Cursor 或 VS Code 的 MCP 配置，支持注释和尾随逗号；整批导入，下方开关决定是否立即连接。",
+      importMcpReadOnly: "配置已锁定，恢复后才能导入。",
+      importMcpParseError: "这不是有效的 JSON / JSONC。",
+      importMcpEmpty: "还没有识别到 MCP 服务器。",
+      importMcpCount: "识别到 {count} 个服务器",
+      importMcpMore: "还有 {count} 个…",
+      importMcpEnable: "导入后立即启用并连接",
+      importMcpActionOn: "导入并启用",
+      importMcpActionOff: "导入为停用",
+      importMcpWorking: "导入中…",
+      importMcpDone: "已导入 {count} 个服务器，其中 {enabled} 个已启用。",
+      importMcpDoneAction: "完成",
+      importUnknownShort: "?",
+      importRenamed: "已重命名“{from}” → “{to}”",
+      importSkipped: "已跳过“{name}”：{reason}",
+      importNote: "“{name}”：{reason}",
+      importReasonSse: "不支持旧版 SSE 传输，请改用 Streamable HTTP",
+      importReasonCommand: "缺少命令",
+      importReasonUrl: "缺少 URL",
+      importReasonInvalidUrl: "URL 需以 http:// 或 https:// 开头",
+      importReasonTransport: "既没有命令也没有 URL",
+      importReasonEntry: "该条目不是服务器对象",
+      importReasonUnknownTransport: "无法识别传输方式，已按字段推断",
+      importReasonSourceDisabled: "源配置里标记为停用",
+      importReasonEnvFile: "未读取 envFile，请手动补全环境变量",
+      importReasonPlaceholder: "含 ${input:…} 占位符，需要手动填写",
+      importReasonDropped: "部分参数、环境变量或请求头已丢弃",
+      importReasonUnknown: "未知原因",
 
       nav: 'MCP 服务器',
       title: 'MCP 服务器',
@@ -612,6 +673,12 @@ window.__ModuleLoader__.load({
         'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16',
         'M8 16H3v5',
       ],
+      download: [
+        'M12 3v12',
+        'm7 10 5 5 5-5',
+        'M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2',
+      ],
+      folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'],
       link: [
         'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71',
         'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
@@ -821,10 +888,20 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dshmcp-empty-title' }, props.t('emptyTitle')),
         h('p', { className: 'dshmcp-empty-hint' }, props.t('emptyHint')),
         h(
-          'button',
-          { type: 'button', className: 'dshmcp-btn', 'data-variant': 'primary', onClick: props.onAdd },
-          h(Icon, { name: 'plus' }),
-          props.t('emptyAction'),
+          'div',
+          { className: 'dshmcp-empty-actions' },
+          h(
+            'button',
+            { type: 'button', className: 'dshmcp-btn', 'data-variant': 'primary', onClick: props.onAdd },
+            h(Icon, { name: 'plus' }),
+            props.t('emptyAction'),
+          ),
+          h(
+            'button',
+            { type: 'button', className: 'dshmcp-btn', disabled: props.readOnly, onClick: props.onImport },
+            h(Icon, { name: 'download' }),
+            props.t('importMcpTitle'),
+          ),
         ),
       );
     }
@@ -1940,6 +2017,7 @@ window.__ModuleLoader__.load({
       setRailEntry: (railEntry) => mutateData(ROUTES.ui, { railEntry }),
       setToolEnabled: (id, name, enabled) => mutateData(ROUTES.tool, { id, name, enabled }),
       importServers: (document) => mutateData(ROUTES.import, { document }),
+      importMcpJson: (document, enable) => mutateData(ROUTES.importJson, { document, enable }),
       exportServers: (includeSecrets) => post(ROUTES.export, { includeSecrets }),
       recover: (mode) => mutateData(ROUTES.recover, { mode }),
     };
@@ -2006,6 +2084,77 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'dshmcp-btn', onClick: () => setMode('reset') }, t('resetStorage'))));
     }
 
+    /**
+     * A themed file picker: the native file control cannot follow the page's
+     * tokens (its button renders in the platform's own colours), so a normal
+     * button opens a visually hidden input and the chosen name is shown beside
+     * it. A dragged file works too.
+     * @param props - `t`, `accept`, `disabled` and `onFile(file)`.
+     */
+    function FileChoice(props) {
+      const t = props.t;
+      const inputRef = React.useRef(null);
+      const [name, setName] = React.useState('');
+      const [dragging, setDragging] = React.useState(false);
+      const choose = (file) => {
+        if (!file) return;
+        setName(file.name);
+        props.onFile(file);
+      };
+      return h(
+        'div',
+        {
+          className: 'dshmcp-file',
+          'data-dragging': dragging ? 'true' : undefined,
+          onDragOver: (event) => {
+            if (props.disabled || !event.dataTransfer) return;
+            event.preventDefault();
+            setDragging(true);
+          },
+          onDragLeave: () => setDragging(false),
+          onDrop: (event) => {
+            if (props.disabled) return;
+            event.preventDefault();
+            setDragging(false);
+            choose(event.dataTransfer?.files?.[0]);
+          },
+        },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dshmcp-btn dshmcp-btn-small',
+            disabled: props.disabled,
+            onClick: () => {
+              if (inputRef.current) inputRef.current.click();
+            },
+          },
+          h(Icon, { name: 'folder' }),
+          t('chooseFile'),
+        ),
+        h(
+          'span',
+          { className: 'dshmcp-file-name', 'data-empty': name === '' ? 'true' : undefined, title: name || undefined },
+          name === '' ? t('noFileChosen') : name,
+        ),
+        h('input', {
+          ref: inputRef,
+          type: 'file',
+          className: 'dshmcp-file-input',
+          accept: props.accept,
+          tabIndex: -1,
+          'aria-hidden': 'true',
+          disabled: props.disabled,
+          onChange: (event) => {
+            const file = event.target.files?.[0];
+            // Clear so choosing the same file again still fires a change event.
+            event.target.value = '';
+            choose(file);
+          },
+        }),
+      );
+    }
+
     function ConfigTransfer({ t, readOnly, actions }) {
       const uid = React.useId();
       const [text, setText] = React.useState('');
@@ -2026,12 +2175,16 @@ window.__ModuleLoader__.load({
       return h('details', { className: 'dshmcp-transfer' },
         h('summary', null, t('configTransfer')),
         h('p', { className: 'dshmcp-hint' }, t('importHint')),
-        h('label', { htmlFor: uid + '-file', className: 'dshmcp-label' }, t('chooseFile')),
-        h('input', { id: uid + '-file', type: 'file', accept: '.json,application/json', disabled: busy,
-          onChange: (event) => { const file = event.target.files?.[0]; if (file) void run(async () => {
+        h(FileChoice, {
+          key: 'file',
+          t,
+          accept: '.json,.jsonc,application/json',
+          disabled: busy,
+          onFile: (file) => void run(async () => {
             if (file.size > 2 * 1024 * 1024) throw new ApiError('invalid', t('fileTooLarge'));
             setText(await file.text());
-          }); } }),
+          }),
+        }),
         h('label', { htmlFor: uid + '-json', className: 'dshmcp-label' }, t('jsonConfig')),
         h('textarea', { id: uid + '-json', className: 'dshmcp-textarea', rows: 8, value: text, spellCheck: false,
           autoComplete: 'off', disabled: busy, 'aria-describedby': uid + '-preview', onChange: (event) => setText(event.target.value) }),
@@ -2050,6 +2203,473 @@ window.__ModuleLoader__.load({
             const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'mcp-servers.json'; anchor.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
           } }, t('download'))));
+    }
+
+    // ── direct MCP JSON import ────────────────────────────────────────────
+    /** Host import-warning reasons → this page's copy. */
+    const IMPORT_REASON_KEY = {
+      'sse-unsupported': 'importReasonSse',
+      'missing-command': 'importReasonCommand',
+      'missing-url': 'importReasonUrl',
+      'invalid-url': 'importReasonInvalidUrl',
+      'missing-transport': 'importReasonTransport',
+      'invalid-entry': 'importReasonEntry',
+      'unknown-transport': 'importReasonUnknownTransport',
+      'source-disabled': 'importReasonSourceDisabled',
+      'env-file-ignored': 'importReasonEnvFile',
+      'input-placeholder': 'importReasonPlaceholder',
+      'dropped-fields': 'importReasonDropped',
+    };
+
+    /** Whether a parsed value is a plain JSON object. */
+    function isPlainObject(value) {
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    }
+
+    /** Whether a config object carries a transport or endpoint field. */
+    function looksLikeServerConfig(value) {
+      return isPlainObject(value) && ['command', 'url', 'transport', 'type'].some((field) => value[field] !== undefined);
+    }
+
+    /**
+     * Strip the JSONC conveniences third-party MCP configs use — `//` and
+     * block comments plus trailing commas — leaving a strict JSON document.
+     * String contents (URLs, for example) are never touched.
+     * @param text - raw pasted text.
+     * @returns the text with comments and trailing commas removed.
+     */
+    function stripJsonConveniences(text) {
+      let stripped = '';
+      let inString = false;
+      let escaped = false;
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+          stripped += char;
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+          stripped += char;
+          continue;
+        }
+        if (char === '/' && text[index + 1] === '/') {
+          while (index < text.length && text[index] !== '\n') index += 1;
+          if (index < text.length) stripped += '\n';
+          continue;
+        }
+        if (char === '/' && text[index + 1] === '*') {
+          index += 2;
+          while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) index += 1;
+          if (index >= text.length) break;
+          index += 1;
+          stripped += ' ';
+          continue;
+        }
+        stripped += char;
+      }
+      // Drop only the commas that directly precede a closing brace or bracket.
+      let output = '';
+      inString = false;
+      escaped = false;
+      for (let index = 0; index < stripped.length; index += 1) {
+        const char = stripped[index];
+        if (inString) {
+          output += char;
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+          output += char;
+          continue;
+        }
+        if (char === ',') {
+          let next = index + 1;
+          while (next < stripped.length && /\s/.test(stripped[next])) next += 1;
+          if (stripped[next] === '}' || stripped[next] === ']') continue;
+        }
+        output += char;
+      }
+      return output;
+    }
+
+    /**
+     * Parse pasted JSON or JSONC into a document.
+     * @param text - pasted configuration.
+     * @returns the parsed document, or undefined when the text is not JSON.
+     */
+    function parseConfigText(text) {
+      if (typeof text !== 'string') return undefined;
+      const source = text.replace(/^\uFEFF/, '').trim();
+      if (source === '') return undefined;
+      try {
+        return JSON.parse(stripJsonConveniences(source));
+      } catch (error) {
+        return undefined;
+      }
+    }
+
+    /**
+     * Read the server entries a pasted document declares, mirroring the Host's
+     * shape order for the preview list. The Host re-reads and validates the
+     * document authoritatively; this only decides what to show before import.
+     * @param document - parsed pasted document.
+     * @returns {{ name: string, config: unknown }[]} entries in document order.
+     */
+    function previewEntries(document) {
+      /** @type {{ name: string, config: unknown }[]} */
+      const entries = [];
+      const add = (name, config) => entries.push({ name: typeof name === 'string' ? name : '', config });
+      if (Array.isArray(document)) {
+        for (const item of document) add(isPlainObject(item) ? item.name : '', item);
+        return entries;
+      }
+      if (!isPlainObject(document)) return entries;
+      if (isPlainObject(document.mcpServers)) {
+        for (const [name, config] of Object.entries(document.mcpServers)) add(name, config);
+        return entries;
+      }
+      if (Array.isArray(document.servers)) {
+        for (const item of document.servers) add(isPlainObject(item) ? item.name : '', item);
+        return entries;
+      }
+      if (isPlainObject(document.servers)) {
+        for (const [name, config] of Object.entries(document.servers)) add(name, config);
+        return entries;
+      }
+      if (looksLikeServerConfig(document)) {
+        add(document.name, document);
+        return entries;
+      }
+      const values = Object.entries(document).filter(
+        ([key]) => !['inputs', '$schema', 'version', 'name', 'description'].includes(key),
+      );
+      if (values.length > 0 && values.every(([, config]) => isPlainObject(config)) && values.some(([, config]) => looksLikeServerConfig(config))) {
+        for (const [name, config] of values) add(name, config);
+      }
+      return entries;
+    }
+
+    /**
+     * One preview transport chip.
+     * @param config - previewed entry config.
+     * @returns 'stdio', 'http', 'sse' or 'invalid'.
+     */
+    function previewTransport(config) {
+      if (!isPlainObject(config)) return 'invalid';
+      const type = String(config.type ?? config.transport ?? '').trim().toLowerCase();
+      if (type === 'sse' || type === 'sse-http' || type === 'server-sent-events') return 'sse';
+      const url = typeof config.url === 'string' && config.url.trim() !== '';
+      const command = typeof config.command === 'string'
+        ? config.command.trim() !== ''
+        : Array.isArray(config.command) && config.command.length > 0;
+      if (type === 'http' || type === 'streamable-http' || type === 'streamablehttp' || type === 'streamable_http' || type === 'http-streamable') {
+        return url ? 'http' : 'invalid';
+      }
+      if (type === 'stdio' || type === 'command' || type === 'process') return command ? 'stdio' : 'invalid';
+      if (url) return 'http';
+      if (command) return 'stdio';
+      return 'invalid';
+    }
+
+    /**
+     * The one-line endpoint preview for a recognized entry.
+     * @param config - previewed entry config.
+     * @returns the URL, or the command line.
+     */
+    function previewTarget(config) {
+      if (!isPlainObject(config)) return '';
+      const url = typeof config.url === 'string' ? config.url.trim() : '';
+      if (url !== '') return url;
+      const parts = [];
+      if (Array.isArray(config.command)) parts.push(...config.command.map(String));
+      else if (typeof config.command === 'string') parts.push(config.command.trim());
+      if (Array.isArray(config.args)) {
+        for (const item of config.args) {
+          if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') parts.push(String(item));
+        }
+      }
+      return parts.join(' ');
+    }
+
+    /**
+     * Localize one Host import-report row.
+     * @param warning - `{ kind: 'renamed'|'skipped'|'note', … }` from `import-json`.
+     * @param t - bound translator.
+     * @returns the sentence to show.
+     */
+    function importWarningText(warning, t) {
+      const reasonKey = IMPORT_REASON_KEY[warning.reason];
+      const reason = t(reasonKey !== undefined ? reasonKey : 'importReasonUnknown');
+      if (warning.kind === 'renamed') return t('importRenamed', { from: warning.from, to: warning.to });
+      if (warning.kind === 'skipped') return t('importSkipped', { name: warning.name, reason });
+      return t('importNote', { name: warning.name, reason });
+    }
+
+    /**
+     * Direct import of another client's MCP JSON: paste (or load) the document,
+     * preview what was recognized, then import it — by default enabled and
+     * connected at once. The Host normalizes names and reports what changed.
+     */
+    function ImportJsonDialog(props) {
+      const t = props.t;
+      const uid = React.useId().replace(/[^A-Za-z0-9_-]/g, '');
+      const id = (name) => 'dshmcp-import-' + name + '-' + uid;
+      const dialogRef = React.useRef(null);
+      const textRef = React.useRef(null);
+      const doneRef = React.useRef(null);
+      const openerRef = React.useRef(null);
+      const aliveRef = React.useRef(true);
+      const [text, setText] = React.useState('');
+      const [enable, setEnable] = React.useState(true);
+      const [busy, setBusy] = React.useState(false);
+      const [failure, setFailure] = React.useState(null);
+      const [result, setResult] = React.useState(null);
+
+      React.useEffect(() => {
+        aliveRef.current = true;
+        return () => {
+          aliveRef.current = false;
+        };
+      }, []);
+
+      // Focus the paste box, and hand focus back to the opener on close.
+      React.useEffect(() => {
+        openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
+        if (textRef.current) textRef.current.focus();
+        const opener = openerRef.current;
+        return () => {
+          if (opener && typeof opener.focus === 'function') {
+            try {
+              opener.focus();
+            } catch (error) {
+              /* the opener may be gone; nothing to restore */
+            }
+          }
+        };
+      }, []);
+
+      const parsed = parseConfigText(text);
+      const preview = parsed === undefined ? [] : previewEntries(parsed);
+      const ready = parsed !== undefined && preview.length > 0 && !props.readOnly;
+
+      // The submit control disappears when the summary replaces the form; keep
+      // focus inside the dialog so Escape and the Tab loop still work.
+      React.useEffect(() => {
+        if (result !== null && doneRef.current && typeof doneRef.current.focus === 'function') {
+          doneRef.current.focus();
+        }
+      }, [result]);
+
+      const submit = async (event) => {
+        event.preventDefault();
+        if (busy || !ready) return;
+        setBusy(true);
+        setFailure(null);
+        try {
+          const outcome = await props.onImport(parsed, enable);
+          if (aliveRef.current) setResult(outcome);
+        } catch (error) {
+          if (aliveRef.current) setFailure(explain(error, t));
+        } finally {
+          if (aliveRef.current) setBusy(false);
+        }
+      };
+
+      /** Keep Tab inside the dialog and let Escape close it. */
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          props.onClose();
+          return;
+        }
+        if (event.key !== 'Tab') return;
+        const root = dialogRef.current;
+        if (!root) return;
+        const selectable = root.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        const nodes = [];
+        for (let index = 0; index < selectable.length; index += 1) {
+          const node = selectable[index];
+          if (node.offsetParent !== null || node === document.activeElement) nodes.push(node);
+        }
+        if (nodes.length === 0) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+
+      const textId = id('json');
+      const previewId = id('preview');
+      const titleId = id('title');
+
+      const body = result === null
+        ? [
+            h('p', { key: 'hint', className: 'dshmcp-hint' }, t('importMcpHint')),
+            props.readOnly
+              ? h('p', { key: 'locked', className: 'dshmcp-hint', role: 'status' }, t('importMcpReadOnly'))
+              : null,
+            h(FileChoice, {
+              key: 'file',
+              t,
+              accept: '.json,.jsonc,application/json',
+              disabled: busy || props.readOnly,
+              onFile: (file) => {
+                if (file.size > 2 * 1024 * 1024) {
+                  setFailure(t('fileTooLarge'));
+                  return;
+                }
+                void file.text().then((value) => {
+                  if (aliveRef.current) {
+                    setFailure(null);
+                    setText(value);
+                  }
+                }).catch(() => {
+                  if (aliveRef.current) setFailure(t('errInternal'));
+                });
+              },
+            }),
+            h('label', { key: 'json-label', htmlFor: textId, className: 'dshmcp-label' }, t('jsonConfig')),
+            h('textarea', {
+              key: 'json',
+              id: textId,
+              ref: textRef,
+              className: 'dshmcp-textarea',
+              rows: 10,
+              value: text,
+              spellCheck: false,
+              autoComplete: 'off',
+              disabled: busy || props.readOnly,
+              'aria-describedby': previewId,
+              placeholder: '{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}',
+              onChange: (event) => setText(event.target.value),
+            }),
+            h(
+              'p',
+              { key: 'preview', id: previewId, className: 'dshmcp-hint' },
+              text.trim() === ''
+                ? t('importMcpEmpty')
+                : parsed === undefined
+                  ? t('importMcpParseError')
+                  : preview.length === 0
+                    ? t('importMcpEmpty')
+                    : t('importMcpCount', { count: preview.length }),
+            ),
+            preview.length === 0
+              ? null
+              : h(
+                  'ul',
+                  { key: 'list', className: 'dshmcp-import-list', 'aria-label': t('importMcpCount', { count: preview.length }) },
+                  preview.slice(0, 8).map((entry, index) => {
+                    const kind = previewTransport(entry.config);
+                    const target = previewTarget(entry.config);
+                    return h(
+                      'li',
+                      { key: index, className: 'dshmcp-import-row' },
+                      h('span', { className: 'dshmcp-import-name' }, entry.name || t('importUnknownShort')),
+                      h('span', {
+                        className: 'dshmcp-chip',
+                        'data-bad': kind === 'invalid' || kind === 'sse' ? 'true' : undefined,
+                      }, kind === 'invalid' ? t('importUnknownShort') : kind),
+                      target ? h('span', { className: 'dshmcp-import-target', title: target }, target) : null,
+                    );
+                  }),
+                  preview.length > 8
+                    ? h('li', { key: 'more', className: 'dshmcp-import-row dshmcp-hint' }, t('importMcpMore', { count: preview.length - 8 }))
+                    : null,
+                ),
+            h(
+              'label',
+              { key: 'enable', className: 'dshmcp-checkbox' },
+              h('input', {
+                type: 'checkbox',
+                checked: enable,
+                disabled: busy || props.readOnly,
+                onChange: (event) => setEnable(event.target.checked),
+              }),
+              t('importMcpEnable'),
+            ),
+          ].filter(Boolean)
+        : [
+            h('p', { key: 'done', className: 'dshmcp-import-summary', role: 'status' },
+              t('importMcpDone', { count: result.imported, enabled: result.enabled })),
+            result.warnings && result.warnings.length > 0
+              ? h('ul', { key: 'notes', className: 'dshmcp-import-notes', 'aria-label': t('importMcpTitle') },
+                  result.warnings.slice(0, 20).map((warning, index) => h('li', { key: index }, importWarningText(warning, t))))
+              : null,
+          ].filter(Boolean);
+
+      return h(
+        'div',
+        { className: 'dshmcp-scrim' },
+        h(
+          'div',
+          {
+            className: 'dshmcp-dialog dshmcp-dialog-import',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-labelledby': titleId,
+            ref: dialogRef,
+            onKeyDown,
+          },
+          h(
+            'form',
+            { className: 'dshmcp-form', onSubmit: submit, noValidate: true },
+            h(
+              'div',
+              { className: 'dshmcp-dialog-head' },
+              h('h3', { className: 'dshmcp-dialog-title', id: titleId }, t('importMcpTitle')),
+              h('button', {
+                type: 'button',
+                className: 'dshmcp-icon-btn',
+                'aria-label': t('closeDialog'),
+                title: t('closeDialog'),
+                onClick: props.onClose,
+              }, h(Icon, { name: 'close' })),
+            ),
+            h(
+              'div',
+              { className: 'dshmcp-dialog-body' },
+              failure
+                ? h('p', { className: 'dshmcp-banner', 'data-tone': 'error', role: 'alert' },
+                    h(Icon, { name: 'alert', size: 16 }),
+                    h('span', { className: 'dshmcp-banner-text' }, failure))
+                : null,
+              body,
+            ),
+            h(
+              'div',
+              { className: 'dshmcp-dialog-foot' },
+              result !== null
+                ? h('button', { ref: doneRef, type: 'button', className: 'dshmcp-btn', 'data-variant': 'primary', onClick: props.onClose }, t('importMcpDoneAction'))
+                : [
+                    h('button', { key: 'cancel', type: 'button', className: 'dshmcp-btn', onClick: props.onClose }, t('cancel')),
+                    h('button', {
+                      key: 'submit',
+                      type: 'submit',
+                      className: 'dshmcp-btn',
+                      'data-variant': 'primary',
+                      disabled: busy || !ready,
+                    }, busy ? t('importMcpWorking') : t(enable ? 'importMcpActionOn' : 'importMcpActionOff')),
+                  ],
+            ),
+          ),
+        ),
+      );
     }
 
 
@@ -2410,6 +3030,7 @@ window.__ModuleLoader__.load({
       const [confirmId, setConfirmId] = React.useState(null);
       const [expanded, setExpanded] = React.useState({});
       const [editor, setEditor] = React.useState(null);
+      const [importOpen, setImportOpen] = React.useState(false);
       const [railBusy, setRailBusy] = React.useState(false);
       const [query, setQuery] = React.useState('');
       const [filter, setFilter] = React.useState('all');
@@ -2580,13 +3201,14 @@ window.__ModuleLoader__.load({
               h('option', { value: 'all' }, t('all')),
               ['ready', 'connecting', 'error', 'disabled', 'stopped'].map((value) => h('option', { key: value, value }, t(PHASE_KEY[value])))),
             h('span', { className: 'dshmcp-caret', 'aria-hidden': 'true' }, h(Icon, { name: 'chevron', size: 14 }))),
+          h('button', { className: 'dshmcp-btn', type: 'button', 'aria-label': t('importMcpTitle'), title: t('importMcpTitle'), disabled: storage.readOnly, onClick: () => setImportOpen(true) }, h(Icon, { name: 'download' }), t('importMcpTitle')),
           h('button', { className: 'dshmcp-btn dshmcp-btn-square', type: 'button', 'aria-label': t('add'), title: t('add'), onClick: () => openEditor('add', null) }, h(Icon, { name: 'plus' })),
           h('button', { className: 'dshmcp-btn dshmcp-btn-square', type: 'button', 'aria-label': t('refreshStatus'), title: t('refreshStatus'), onClick: () => requestList(true) }, h(Icon, { name: 'refresh' }))),
         h('div', { inert: storage.readOnly ? '' : undefined },
         loading
           ? h(SkeletonRows, { t })
           : allRows.length === 0 && external.length === 0 && loadError === null
-            ? h(EmptyState, { t, onAdd: () => openEditor('add', null) })
+            ? h(EmptyState, { t, readOnly: storage.readOnly, onAdd: () => openEditor('add', null), onImport: () => setImportOpen(true) })
             : rows.length === 0
               ? (foreign.length === 0 && loadError === null ? h('p', { role: 'status', className: 'dshmcp-hint' }, t('noMatches')) : null)
               : h(
@@ -2640,6 +3262,14 @@ window.__ModuleLoader__.load({
               onDetachedError: (error) => { if (alive.current) setNotice({ tone: 'error', text: explain(error, t) }); },
             })
           : null,
+        importOpen
+          ? h(ImportJsonDialog, {
+              t,
+              readOnly: storage.readOnly,
+              onClose: () => setImportOpen(false),
+              onImport: (document, enable) => actions.importMcpJson(document, enable),
+            })
+          : null,
       );
     }
 
@@ -2663,6 +3293,11 @@ window.__ModuleLoader__.load({
 .dshmcp-transfer>*{max-width:100%}
 .dshmcp-transfer>label,.dshmcp-transfer>input{margin:8px 0}
 .dshmcp-checkbox{display:flex;gap:8px;align-items:center}
+.dshmcp-file{display:flex;align-items:center;gap:10px;padding:5px 8px;border:.5px dashed var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent);min-width:0;transition:border-color .15s ease,background .15s ease}
+.dshmcp-file[data-dragging=true]{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,transparent)}
+.dshmcp-file-name{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.dshmcp-file-name[data-empty=true]{color:var(--dsw-alias-label-tertiary)}
+.dshmcp-file-input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap;pointer-events:none}
 .dshmcp-options{display:flex;flex-direction:column;gap:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);padding:12px;min-width:0}
 .dshmcp-log ol{max-height:200px;overflow:auto;padding-left:20px;font-size:12px;overflow-wrap:anywhere}
 .dshmcp-log [data-level=error]{color:var(--dsw-alias-state-error-primary)}
@@ -2781,7 +3416,16 @@ window.__ModuleLoader__.load({
 .dshmcp-empty-icon{display:inline-flex;color:var(--dsw-alias-label-secondary)}
 .dshmcp-empty-title{margin:0;font-size:14px;font-weight:500;line-height:20px}
 .dshmcp-empty-hint{margin:0;max-width:46ch;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
-.dshmcp-empty .dshmcp-btn{margin-top:6px}
+.dshmcp-empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:6px;max-width:100%}
+.dshmcp-empty-actions .dshmcp-btn{margin-top:0}
+.dshmcp-dialog-import{width:min(680px,100%)}
+.dshmcp-import-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:174px;overflow-y:auto;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);padding:8px 10px}
+.dshmcp-import-row{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px;min-width:0}
+.dshmcp-import-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;flex:none;max-width:40%}
+.dshmcp-import-target{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.dshmcp-chip[data-bad=true]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,transparent);color:var(--dsw-alias-state-warn-primary);text-transform:none}
+.dshmcp-import-summary{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
+.dshmcp-import-notes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dshmcp-skeleton{display:flex;flex-direction:column;gap:14px;padding:8px 0;margin-top:4px}
 .dshmcp-skeleton-row{display:flex;align-items:center;gap:12px}
 .dshmcp-skeleton-dot{width:8px;height:8px;border-radius:50%;flex:none;background:color-mix(in srgb,var(--dsw-alias-label-primary) 10%,transparent)}

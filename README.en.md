@@ -36,6 +36,10 @@ tools appear in the agent as native `mcp__<server>__<tool>` tools — no hand-ed
   and live tool count, and can be enabled or disabled in place. **Migrate here** disables the
   source first and waits for its tools to be released before copying the config and connecting, so
   two connections never compete for the same tool names.
+- **Direct MCP JSON import.** The toolbar's *Import MCP JSON* button (also in the empty state)
+  accepts the `mcpServers` object from Claude Desktop, Claude Code or Cursor, a VS Code `servers`
+  object or a bare map — JSONC comments and trailing commas included. It detects the transport,
+  normalizes names, and by default enables and connects the imported servers right away.
 - **Configuration management.** Search, status filtering, duplicate as a uniquely named draft,
   JSON import/export, damaged-storage recovery, per-tool switches and dynamic tool-list refresh.
 - **No dependencies.** A small self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
@@ -167,12 +171,29 @@ Servers already configured as separate `@deepseek-ai/dsh-mcp-client` rows appear
 - Migration copies environment variables and headers as plain text; `!!js process.env.X` becomes
   the resolved value.
 
+### Direct import of another client's MCP JSON
+
+The toolbar's **Import MCP JSON** button (the empty state offers one too) opens a dedicated dialog:
+
+- Paste a Claude Desktop, Claude Code or Cursor `{ "mcpServers": … }`, a VS Code
+  `{ "servers": … }` (sibling `inputs` is ignored), one server object, or a bare map — or load the
+  file directly.
+- JSONC comments and trailing commas are accepted, so an annotated `mcp.json` can be pasted as-is.
+- The transport is detected (stdio or HTTP) and names are normalized: spaces, dots and similar
+  invalid characters become dashes, and a collision appends `-2`, `-3`. The dialog previews the
+  recognized servers, then lists renames, skips and notes after import.
+- *Enable and connect immediately* is on by default; uncheck it to store the servers disabled. An
+  entry marked `"disabled": true` in the source stays disabled.
+- Entries using the legacy SSE transport are skipped with a reason instead of being stored as
+  servers that can never connect.
+
 ### Import, export and duplicate
 
-Expand the transfer section above the final **Show in the sidebar** row:
+Expand the transfer section above the final **Show in the sidebar** row (this page's own backup
+format):
 
-- Accepts a server array, a `{ "version": 1, "servers": [...] }` export document, or the common
-  `{ "mcpServers": { "name": { "command": "…" } } }` shape.
+- Accepts a server array or a `{ "version": 1, "servers": [...] }` export document; use the direct
+  import above for another client's config.
 - 1–200 records per batch; the whole batch is validated before any write. Duplicate names reject
   the batch.
 - Imported servers are always disabled. Fill in missing credentials, then enable them manually.
@@ -236,6 +257,7 @@ All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
 | `ui` | The `railEntry` preference |
 | `session` / `session-set` | Session visibility and reset |
 | `import` / `export` | Batch import and credential-optional export |
+| `import-json` | Direct third-party MCP JSON import, optionally enabled at once |
 | `recover` | Archive the original and restore a backup or reset |
 | `tool` | Enable or disable a raw tool name |
 | `repair-patch` | Move duplicate home-patch declarations into the profile patch |
@@ -255,12 +277,13 @@ npm run test:browser    # after preparing the environment in test/BROWSER.md
 ```
 
 - Smoke suites: `mcp` 29 checks, `external` 93, `takeover-race` 8, `patch-repair` 23.
-- Node: 31 `regression` + 18 `client` tests, 49 in total, covering dual-entry sync, stale poll
-  responses, cancellation, failed writes, recovery, dynamic tools and page races.
+- Node: 35 `regression` + 21 `client` tests, 56 in total, covering dual-entry sync, stale poll
+  responses, cancellation, failed writes, recovery, dynamic tools, page races and direct-import
+  normalization.
 - The browser suite runs a real React 18 page against real Host routes and a local fake MCP server.
-  It covers add/edit/duplicate/delete, connection options, tool switches, import/export,
-  search/filter, the sidebar preference, dialog focus, and horizontal overflow at 320–1440 px.
-  See [test/BROWSER.md](test/BROWSER.md).
+  It covers add/edit/duplicate/delete, connection options, tool switches, import/export, direct MCP
+  JSON import, search/filter, the sidebar preference, dialog focus, and horizontal overflow at
+  320–1440 px. See [test/BROWSER.md](test/BROWSER.md).
 - CI runs `check` and `test` on Ubuntu/macOS × Node 22/24, plus a separate browser job.
 
 ## Troubleshooting

@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Direct MCP JSON import: paste or load a Claude Desktop / Claude Code / Cursor `mcpServers`
+  document, a VS Code `servers` object or a bare map (JSONC comments and trailing commas included).
+  Names are normalized and de-duplicated, the transport is detected, legacy-SSE entries are skipped
+  with a reason, and imported servers connect immediately unless the import is switched to disabled.
 - Repair cross-layer duplicate patch declarations at boot, so an entry inserted by the
   home patch and overridden by the profile patch becomes toggleable again.
 - Per-Session MCP visibility: the `/mcp` panel, an "MCP" View tab beside Chat and

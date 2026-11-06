@@ -28,6 +28,9 @@ Harness。
   `/mcp` 里按需开启。适合工具很多的服务器；`dsh-mcp-client` 条目有同名开关。
 - **兼容已有 `dsh-mcp-client` 条目。** 外部条目会列出入口 id、传输方式和实时工具数，可以直接
   启用/停用；「迁到此页」会先停用原条目、等待工具释放，再复制配置并连接，避免两条连接抢同名工具。
+- **一键导入其他客户端的 MCP JSON。** 工具栏的「导入 MCP JSON」（空状态里也有）接受 Claude
+  Desktop、Claude Code、Cursor 的 `mcpServers`，VS Code 的 `servers` 对象或裸映射，支持 JSONC
+  注释；自动识别传输、修正名称，默认导入后立即启用并连接。
 - **配置管理。** 搜索、状态筛选、复制为新草稿、JSON 批量导入/导出、损坏文件恢复、
   逐工具启停与自动刷新工具目录。
 - **零依赖。** 自带小型 MCP 客户端（stdio JSON-RPC + Streamable HTTP）、原子 JSON 存储和精确
@@ -148,12 +151,25 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
   如果本页已有同名记录，会原地替换并保留 id，也可以用来修复卡在冲突报错里的记录。
 - 迁移会带来明文的环境变量和请求头；`!!js process.env.X` 会变成求值后的真实值。
 
+### 直接导入其他客户端的 MCP JSON
+
+工具栏的「导入 MCP JSON」按钮（空状态里也有一个）打开直达导入弹窗：
+
+- 粘贴 Claude Desktop / Claude Code / Cursor 的 `{ "mcpServers": … }`、VS Code 的
+  `{ "servers": … }`（同级的 `inputs` 会忽略）、单个服务器对象或裸映射都可以，也可以直接读取文件。
+- 支持 JSONC 注释和尾随逗号：带注释的 `mcp.json` 可以原样粘贴。
+- 自动识别 stdio / HTTP 传输，把名称里的空格、点号等非法字符规范成短横线；与已有记录重名时
+  追加 `-2`、`-3`。弹窗先预览识别到的服务器，导入后列出重命名、跳过和提示。
+- 默认「导入后立即启用并连接」；取消勾选则保存为停用。源配置里标了 `"disabled": true` 的条目
+  保持停用。
+- 不支持旧版 SSE 传输的条目会被跳过并说明原因，不会存成连不上的服务器。
+
 ### 导入、导出与复制
 
-在页面末尾「在左侧栏显示入口」上方展开导入/导出区域：
+在页面末尾「在左侧栏显示入口」上方展开导入/导出区域（本页自己的备份格式）：
 
-- 支持服务器数组、`{ "version": 1, "servers": [...] }` 导出文档，以及常见的
-  `{ "mcpServers": { "名称": { "command": "…" } } }` 格式。
+- 支持服务器数组和 `{ "version": 1, "servers": [...] }` 导出文档；其他客户端的配置请用上面的
+  直达导入。
 - 每批 1–200 条；整批校验通过才写入。名称冲突会拒绝整批。
 - 导入的服务器一律保持停用，补全凭据后再手动启用。
 - 导出默认省略环境变量和请求头；显式勾选后才会写入这些明文值。命令参数和 URL 始终保留，
@@ -210,6 +226,7 @@ Host 侧模块：
 | `ui` | `railEntry` 偏好 |
 | `session` / `session-set` | 会话级可见性与重置 |
 | `import` / `export` | 批量导入、导出配置 |
+| `import-json` | 直接导入其他客户端的 MCP JSON，可选立即启用 |
 | `recover` | 归档原文件并恢复备份或重置 |
 | `tool` | 按原始工具名启停 |
 | `repair-patch` | 把 home patch 中重复声明的条目移入 profile patch |
@@ -229,11 +246,11 @@ npm run test:browser    # 按 test/BROWSER.md 准备环境后运行
 ```
 
 - smoke：`mcp` 29 项、`external` 93 项、`takeover-race` 8 项、`patch-repair` 23 项。
-- Node：31 项 `regression` + 18 项 `client` 测试，共 49 项，覆盖双入口同步、轮询乱序、取消、
-  持久化失败、恢复、动态工具和页面竞态。
+- Node：35 项 `regression` + 21 项 `client` 测试，共 56 项，覆盖双入口同步、轮询乱序、取消、
+  持久化失败、恢复、动态工具、页面竞态和直接导入的归一化。
 - 浏览器套件通过真实 React 18 页面、真实 Host 路由和本地假 MCP 服务运行，覆盖创建/编辑/复制/
-  删除、连接选项、工具开关、导入导出、搜索筛选、侧栏偏好、弹窗焦点和 320–1440 像素宽度。
-  准备方式见 [test/BROWSER.md](test/BROWSER.md)。
+  删除、连接选项、工具开关、导入导出、直接导入 MCP JSON、搜索筛选、侧栏偏好、弹窗焦点和
+  320–1440 像素宽度。准备方式见 [test/BROWSER.md](test/BROWSER.md)。
 - CI 在 Ubuntu/macOS × Node 22/24 上跑 `check` 和 `test`，另有独立的浏览器作业。
 
 ## 常见问题

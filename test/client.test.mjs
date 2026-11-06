@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { CONNECTION_OPTIONS } from '../host/store.js';
 const source = (await readFile(new URL('../client.js', import.meta.url), 'utf8')).replace(
   'return { NS, inject, apply };',
-  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, CONNECTION_OPTIONS, McpSessionPanel, openSessionPanel, closeSessionPanel };',
+  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, CONNECTION_OPTIONS, McpSessionPanel, openSessionPanel, closeSessionPanel, parseConfigText, previewEntries, previewTransport, previewTarget, importWarningText, ImportJsonDialog };',
 );
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -121,6 +121,70 @@ test('page exposes import/export, search, status and storage recovery controls',
   assert.ok(nodes.some((node) => node.type === 'input' && node.props.type === 'search'));
   assert.ok(nodes.some((node) => node.type?.name === 'ConfigTransfer'));
   assert.ok(nodes.some((node) => node.type?.name === 'StorageRecovery'));
+  const importer = nodes.find((node) => node.type === 'button' && node.props['aria-label'] === f.t('importMcpTitle'));
+  assert.notEqual(importer, undefined);
+  importer.props.onClick();
+  assert.ok(elements(page.render()).some((node) => node.type?.name === 'ImportJsonDialog'));
+});
+
+test('direct MCP JSON paste tolerates JSONC comments and trailing commas', () => {
+  const f = fixture();
+  const document = f.api.parseConfigText(`{
+    // Claude Desktop / Cursor style
+    "mcpServers": {
+      "example-server": { "command": "npx", "args": ["-y", "pkg"], /* inline */ },
+      "remote": { "type": "http", "url": "https://example.com/mcp?query=a//b", },
+    },
+  }`);
+  assert.equal(document.mcpServers['example-server'].command, 'npx');
+  assert.equal(document.mcpServers.remote.url, 'https://example.com/mcp?query=a//b');
+  assert.equal(f.api.parseConfigText('\uFEFF{"mcpServers":{}}').mcpServers !== undefined, true);
+  assert.equal(f.api.parseConfigText('{ broken'), undefined);
+  assert.equal(f.api.parseConfigText('   '), undefined);
+});
+
+test('the import preview reads every supported document shape', () => {
+  const f = fixture();
+  const names = (document) => plain(f.api.previewEntries(document)).map((entry) => entry.name);
+  assert.deepEqual(names({ mcpServers: { a: { command: 'node' }, b: { url: 'https://example.com/mcp' } } }), ['a', 'b']);
+  assert.deepEqual(names({ inputs: [{ id: 'token' }], servers: { vs: { type: 'stdio', command: 'node' } } }), ['vs']);
+  assert.deepEqual(names([{ name: 'arr', transport: 'stdio', command: 'node' }]), ['arr']);
+  assert.deepEqual(names({ bare: { command: 'node' } }), ['bare']);
+  assert.deepEqual(names({ name: 'solo', command: 'node' }), ['solo']);
+  assert.deepEqual(names({ inputs: [], foo: 'bar' }), []);
+  assert.equal(f.api.previewTransport({ type: 'sse', url: 'https://example.com/sse' }), 'sse');
+  assert.equal(f.api.previewTransport({ command: 'node' }), 'stdio');
+  assert.equal(f.api.previewTransport({ url: 'https://example.com/mcp' }), 'http');
+  assert.equal(f.api.previewTransport({ type: 'stdio' }), 'invalid');
+  assert.equal(f.api.previewTarget({ command: 'node', args: ['server.mjs'] }), 'node server.mjs');
+  assert.equal(f.api.previewTarget({ url: 'https://example.com/mcp' }), 'https://example.com/mcp');
+});
+
+test('the direct import dialog posts the parsed document and reports the summary', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  let received;
+  const onImport = async (document, enable) => {
+    received = { document, enable };
+    return {
+      imported: 1,
+      enabled: 1,
+      warnings: [{ kind: 'renamed', from: 'My Server', to: 'My-Server' }],
+    };
+  };
+  const dialog = f.mount(f.api.ImportJsonDialog, { t: f.t, readOnly: false, onClose() {}, onImport });
+  const textarea = () => elements(dialog.render()).find((node) => node.type === 'textarea');
+  textarea().props.onChange({ target: { value: '{"mcpServers":{"My Server":{"command":"node"}}}' } });
+  dialog.render();
+  assert.equal(textarea().props.value, '{"mcpServers":{"My Server":{"command":"node"}}}');
+  const form = elements(dialog.render()).find((node) => node.type === 'form');
+  await form.props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(plain(received.document), { mcpServers: { 'My Server': { command: 'node' } } });
+  assert.equal(received.enable, true);
+  const nodes = elements(dialog.render());
+  assert.ok(nodes.some((node) => node.children?.[0] === f.t('importMcpDone', { count: 1, enabled: 1 })));
+  assert.ok(nodes.some((node) => node.type === 'li' && node.children?.[0] === f.t('importRenamed', { from: 'My Server', to: 'My-Server' })));
+  assert.equal(f.api.importWarningText({ kind: 'skipped', name: 'sse', reason: 'sse-unsupported' }, f.t),
+    f.t('importSkipped', { name: 'sse', reason: f.t('importReasonSse') }));
 });
 
 test('a late read from one surface cannot replace a newer snapshot from another', async (t) => {

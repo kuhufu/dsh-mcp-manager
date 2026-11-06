@@ -22,7 +22,7 @@ npm run test:browser
 MCP_QA_BROWSER=chrome npm run test:browser
 ```
 
-覆盖创建、编辑、复制、删除、连接选项、工具开关、导入导出、搜索筛选、侧栏偏好、
+覆盖创建、编辑、复制、删除、连接选项、工具开关、导入导出、直接导入 MCP JSON、搜索筛选、侧栏偏好、
 保存期间关闭弹窗、弹窗键盘焦点，以及 320 / 768 / 1024 / 1440 像素宽度下的水平溢出与 React 错误。
 
 `npm run test:browser` 是独立入口，并由 CI 的 browser 作业执行。

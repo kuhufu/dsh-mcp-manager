@@ -36,6 +36,8 @@ export const EXTERNAL_TOGGLE_PATH = '/api/mcp-manager.toggle-external';
 export const UI_PATH = '/api/mcp-manager.ui';
 /** Absolute path of the batch configuration import route. */
 export const IMPORT_PATH = '/api/mcp-manager.import';
+/** Absolute path of the direct third-party MCP JSON import route. */
+export const IMPORT_JSON_PATH = '/api/mcp-manager.import-json';
 /** Absolute path of the configuration export route. */
 export const EXPORT_PATH = '/api/mcp-manager.export';
 /** Absolute path of the storage recovery route. */
@@ -62,6 +64,7 @@ export const ROUTE_PATHS = Object.freeze([
   EXTERNAL_TOGGLE_PATH,
   UI_PATH,
   IMPORT_PATH,
+  IMPORT_JSON_PATH,
   EXPORT_PATH,
   RECOVER_PATH,
   TOOL_PATH,
@@ -180,6 +183,19 @@ export function createFetchRoutes(manager, options = {}) {
       return { ok: true, servers: result.servers, ui: result.ui };
     }, logger),
     route(manager, IMPORT_PATH, async (body) => ({ ok: true, ...await manager.importServers(body) }), logger),
+    route(manager, IMPORT_JSON_PATH, async (body) => {
+      if (body.document === undefined) {
+        throw new ManagerError('invalid', 'request body must include "document"', 'document');
+      }
+      const result = await manager.importMcpJson({ document: body.document, enable: body.enable });
+      return {
+        ok: true,
+        imported: result.imported,
+        enabled: result.enabled,
+        warnings: result.warnings,
+        servers: result.servers,
+      };
+    }, logger),
     route(manager, EXPORT_PATH, async (body) => ({ ok: true, document: manager.exportServers(body) }), logger),
     route(manager, RECOVER_PATH, async (body) => ({ ok: true, ...await manager.recoverStorage(body) }), logger),
     route(manager, TOOL_PATH, async (body) => ({ ok: true, ...await manager.setToolEnabled({ ...body, id: requireId(body) }) }), logger),

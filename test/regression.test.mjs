@@ -181,6 +181,113 @@ test('batch import is atomic, imports disabled, exports omit credentials by defa
   const full = await call('export', { includeSecrets: true }); assert.equal(full.document.servers[0].env.TOKEN, 'private');
 });
 
+test('direct MCP JSON import normalizes standard configs and reports what changed', async (t) => {
+  const { manager } = await managerFixture(t);
+  const routes = createFetchRoutes(manager);
+  const call = async (action, body) => (await routes.find((route) => route.path.endsWith('.' + action)).fetch(new Request('http://localhost/', { method: 'POST', body: JSON.stringify(body) }))).json();
+  const document = {
+    mcpServers: {
+      'My Server': { command: 'node', args: ['-y', 42], env: { TOKEN: 7, 'bad key': 'x' } },
+      'my.server': { command: 'node', disabled: true },
+      remote: { type: 'streamable-http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer t' } },
+      'tweak me': { command: 'node', requestTimeoutMs: 5, autoInject: false },
+      legacy: { type: 'sse', url: 'https://example.com/sse' },
+      empty: { command: '' },
+    },
+  };
+  const imported = await call('import-json', { document, enable: false });
+  assert.equal(imported.ok, true);
+  assert.equal(imported.imported, 4);
+  assert.equal(imported.enabled, 0);
+  assert.deepEqual(manager.list().map((server) => server.name), ['My-Server', 'my-server', 'remote', 'tweak-me']);
+  assert.deepEqual(
+    imported.warnings.filter((warning) => warning.kind === 'renamed').map((warning) => [warning.from, warning.to]),
+    [['My Server', 'My-Server'], ['my.server', 'my-server'], ['tweak me', 'tweak-me']],
+  );
+  assert.deepEqual(
+    imported.warnings.filter((warning) => warning.kind === 'skipped').map((warning) => warning.reason).sort(),
+    ['missing-command', 'sse-unsupported'],
+  );
+  const stdio = manager.list()[0];
+  assert.deepEqual(stdio.args, ['-y', '42']);
+  assert.equal(stdio.env.TOKEN, '7');
+  assert.equal(stdio.enabled, false);
+  const httpServer = manager.list()[2];
+  assert.equal(httpServer.transport, 'http');
+  assert.equal(httpServer.headers.Authorization, 'Bearer t');
+  const tweaked = manager.list()[3];
+  assert.equal(tweaked.requestTimeoutMs, undefined, 'out-of-range options fall back to defaults');
+  assert.equal(tweaked.autoInject, false);
+  assert.ok(imported.warnings.some((warning) => warning.kind === 'note' && warning.name === 'tweak-me' && warning.reason === 'dropped-fields'));
+});
+
+test('direct MCP JSON import connects enabled servers immediately', async (t) => {
+  const { manager, tools } = await managerFixture(t);
+  const routes = createFetchRoutes(manager);
+  const call = async (action, body) => (await routes.find((route) => route.path.endsWith('.' + action)).fetch(new Request('http://localhost/', { method: 'POST', body: JSON.stringify(body) }))).json();
+  const imported = await call('import-json', {
+    document: { mcpServers: { direct: { command: process.execPath, args: [path.join(import.meta.dirname, 'fake-server.mjs')] } } },
+  });
+  assert.equal(imported.ok, true);
+  assert.equal(imported.imported, 1);
+  assert.equal(imported.enabled, 1);
+  assert.equal(manager.list()[0].enabled, true);
+  await until(() => manager.list()[0].status === 'ready');
+  assert.ok(tools.has('mcp__direct__echo'));
+});
+
+test('direct MCP JSON import accepts VS Code servers objects and de-duplicates names', async (t) => {
+  const { manager } = await managerFixture(t);
+  await manager.save({ server: { name: 'taken', transport: 'stdio', command: 'node', enabled: false } });
+  const routes = createFetchRoutes(manager);
+  const call = async (action, body) => (await routes.find((route) => route.path.endsWith('.' + action)).fetch(new Request('http://localhost/', { method: 'POST', body: JSON.stringify(body) }))).json();
+  const imported = await call('import-json', {
+    document: {
+      inputs: [{ id: 'token', type: 'promptString' }],
+      servers: {
+        taken: { type: 'stdio', command: 'node' },
+        other: { type: 'http', url: 'https://example.com/mcp' },
+      },
+    },
+    enable: false,
+  });
+  assert.equal(imported.ok, true);
+  assert.equal(imported.imported, 2);
+  assert.equal(imported.enabled, 0);
+  assert.deepEqual(manager.list().map((server) => server.name).sort(), ['other', 'taken', 'taken-2']);
+  assert.deepEqual(imported.warnings.filter((warning) => warning.kind === 'renamed'), [{ kind: 'renamed', from: 'taken', to: 'taken-2' }]);
+
+  const own = await call('import-json', {
+    document: { version: 1, servers: [{ name: 'own', transport: 'http', url: 'https://example.com/own', requestTimeoutMs: 120000 }] },
+    enable: false,
+  });
+  assert.equal(own.ok, true);
+  assert.equal(own.imported, 1);
+  const record = manager.list().find((server) => server.name === 'own');
+  assert.equal(record.requestTimeoutMs, 120000);
+  assert.equal(record.enabled, false);
+});
+
+test('direct MCP JSON import rejects documents without usable servers', async (t) => {
+  const { manager } = await managerFixture(t);
+  const routes = createFetchRoutes(manager);
+  const call = async (action, body) => (await routes.find((route) => route.path.endsWith('.' + action)).fetch(new Request('http://localhost/', { method: 'POST', body: JSON.stringify(body) }))).json();
+  const unusable = await call('import-json', { document: { mcpServers: { legacy: { type: 'sse', url: 'https://example.com/sse' } } } });
+  assert.equal(unusable.ok, false);
+  assert.equal(unusable.error.code, 'invalid');
+  const missing = await call('import-json', {});
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error.field, 'document');
+  const invalidEnable = await call('import-json', { document: { mcpServers: { ok: { command: 'node' } } }, enable: 'yes' });
+  assert.equal(invalidEnable.ok, false);
+  assert.equal(invalidEnable.error.field, 'enable');
+  const tooMany = { mcpServers: Object.fromEntries(Array.from({ length: 201 }, (_, index) => ['s' + index, { command: 'node' }])) };
+  const overflow = await call('import-json', { document: tooMany });
+  assert.equal(overflow.ok, false);
+  assert.equal(overflow.error.code, 'invalid');
+  assert.equal(manager.list().length, 0);
+});
+
 test('tool switches persist, preserve public names, and activity avoids tool arguments', async (t) => {
   const { manager, tools } = await managerFixture(t);
   const saved = await manager.save({ server: { name: 'fake', transport: 'stdio', command: process.execPath, args: [path.join(import.meta.dirname, 'fake-server.mjs')] } });

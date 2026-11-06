@@ -113,6 +113,7 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.toggle-external` | `{ entryId, enabled }` | `{ ok: true, repaired: boolean, servers: ServerView[] }` |
 | `/api/mcp-manager.ui` | `{ railEntry: boolean }` | `{ ok: true, servers: ServerView[], ui: UiState }` |
 | `/api/mcp-manager.import` | `{ document }` | `{ ok: true, imported: number, servers: ServerView[] }` |
+| `/api/mcp-manager.import-json` | `{ document, enable?: boolean }` | `{ ok: true, imported: number, enabled: number, warnings: ImportWarning[], servers: ServerView[] }` |
 | `/api/mcp-manager.export` | `{ includeSecrets?: boolean }` | `{ ok: true, document: { version: 1, servers: ServerInput[] } }` |
 | `/api/mcp-manager.recover` | `{ mode: "backup" | "reset" }` | `{ ok: true, servers: ServerView[], archive?: string }` |
 | `/api/mcp-manager.tool` | `{ id, name: string, enabled: boolean }` | `{ ok: true, servers: ServerView[] }` |
@@ -132,6 +133,39 @@ and may themselves contain credentials. Restore missing credentials before enabl
 Tool switches use raw names from the current advertised catalog; unknown names fail with
 `not-found` before persistence. Disabled tools remain in the displayed catalog.
 
+`import-json` is the direct path for a document written by another client; the page's paste box
+sends it after stripping JSONC comments and trailing commas. Accepted shapes, tried in order:
+`{ mcpServers: { name: config } }` (Claude Desktop, Claude Code, Cursor), a `servers` object
+(VS Code; sibling `inputs` is ignored) or this bundle's own `servers` array, one server object,
+or a bare `{ name: config }` map. Entries are resolved individually: unusable ones become
+`skipped` warnings and the rest still import, in one atomic write. `enable` defaults to `true`;
+imported servers are persisted enabled, and the manager reconciles connections before replying,
+so `enabled` counts records that are starting now. A source entry with `"disabled": true` stays
+disabled and is reported as a `note`.
+
+Names are coerced to the tool-namespace grammar (`^[A-Za-z0-9_-]{1,32}$`): invalid runs become
+`-`, leading/trailing dashes are trimmed, an empty result becomes `server`, and a collision with
+an existing record or an earlier entry of the batch appends `-2`, `-3`, …; every change is a
+`renamed` warning. Transport comes from `type`/`transport` when present, otherwise from `url`
+(http) or `command` (stdio). The legacy SSE transport is not supported by this bundle, so such
+entries are skipped rather than stored as broken servers. Scalar JSON values in `args`, `env`
+and `headers` are stringified; keys that violate the Host's `env`/header rules are dropped (the
+entry is then reported with a `dropped-fields` note). `envFile` is not read, and a VS Code
+`${input:…}` placeholder is kept verbatim, both flagged as notes. Connection options,
+`autoInject` and `disabledTools` are preserved when present; an out-of-range connection option
+falls back to its default and is reported as a note. Environment values and headers are copied
+into this page's storage as plain text, exactly like a save or the batch import. The request fails
+with `invalid` only when the document declares no servers, exceeds 200 entries, or nothing in it
+is importable.
+
+```ts
+ImportWarning =
+  | { kind: "renamed", from: string, to: string }
+  | { kind: "skipped", name: string, reason: "sse-unsupported" | "missing-command" | "missing-url"
+      | "invalid-url" | "missing-transport" | "invalid-entry" }
+  | { kind: "note", name: string, reason: "unknown-transport" | "source-disabled"
+      | "env-file-ignored" | "input-placeholder" | "dropped-fields" }
+```
 
 `takeover` migrates one live `external` row into a managed record (or replaces the managed record
 with the same `name`, keeping its id, so a broken row can be repaired in place): it validates the
