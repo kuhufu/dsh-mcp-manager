@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rename, rm, readdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import os from 'node:os';
 import { createStore, validateServerInput } from '../host/store.js';
 import { connect, createHttpTransport, createRpcConnection } from '../host/mcp.js';
 import { createMcpManager } from '../host/manager.js';
 import { createFetchRoutes } from '../host/routes.js';
 import { createSessionState } from '../host/session-state.js';
+import { repairPatchLayers } from '../host/patch-repair.js';
 import { createExternalDefaults } from '../host/external-defaults.js';
 import { apply } from '../index.js';
 
@@ -583,4 +585,24 @@ test('on-demand retries preserve backoff and exhausted budgets across unrelated 
   assert.equal(manager.list()[0].logs.filter((log) => log.message === 'Connecting').length, 2);
   await manager.runCommand(owner, 'off missing');
   assert.equal(manager.list()[0].status, 'stopped');
+});
+
+test('a cross-layer duplicate is moved into the profile layer and stays disabled', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, '[ { insert: [ { id: rea-mcp, name: "@deepseek-ai/dsh-mcp-client", config: { serverName: rea } } ] } ]\n');
+  await writeFile(profilePatch, '- id: locale\n  config:\n    preference: zh\n- id: rea-mcp\n  disabled: true\n');
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, ['rea-mcp']);
+  assert.match(await readFile(homePatch, 'utf8'), /insert: \[\]/);
+
+  const profile = await readFile(profilePatch, 'utf8');
+  assert.ok(profile.indexOf('insert:') < profile.indexOf('- id: rea-mcp'), 'the insert must precede the override');
+  assert.equal(profile.match(/^\s*-\s+id: rea-mcp$/gm).length, 1, 'exactly one declaration survives');
+
+  const again = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(again.moved, [], 'repair is idempotent');
 });

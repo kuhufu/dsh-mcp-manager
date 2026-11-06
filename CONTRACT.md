@@ -198,6 +198,9 @@ configuration:
   its tools from that Session's Agent only. Unloading the plugin releases every registration.
 - A server stays connected while any Session explicitly shows it, so `/mcp on` can reveal a
   globally disabled server without enabling it for everyone.
+- `repair-patch` moves a home-patch `insert` into the profile patch when the profile
+  also overrides that id: the two layers apply in a fixed order, so such an entry can never
+  be toggled. `boot()` runs it once (no duplicates means no write) and the route exposes it.
 - `session` / `session-set` are the panel's routes; `SessionServerView` is
   `{ id, name, enabled, status, toolCount, visible }`, and the same payload carries
   `external: { entryId, serverName, enabled, toolCount, visible }[]`.

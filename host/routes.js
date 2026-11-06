@@ -48,6 +48,8 @@ export const SESSION_PATH = '/api/mcp-manager.session';
 export const SESSION_SET_PATH = '/api/mcp-manager.session-set';
 /** Absolute path of the external-entry default-injection route. */
 export const EXTERNAL_DEFAULT_PATH = '/api/mcp-manager.external-default';
+/** Absolute path of the duplicate-declaration repair route. */
+export const REPAIR_PATCH_PATH = '/api/mcp-manager.repair-patch';
 
 /** Every path this bundle owns, in registration order. */
 export const ROUTE_PATHS = Object.freeze([
@@ -64,6 +66,7 @@ export const ROUTE_PATHS = Object.freeze([
   RECOVER_PATH,
   TOOL_PATH,
   SESSION_PATH,
+  REPAIR_PATCH_PATH,
   EXTERNAL_DEFAULT_PATH,
   SESSION_SET_PATH,
 ]);
@@ -186,6 +189,7 @@ export function createFetchRoutes(manager, options = {}) {
       }
       return { ok: true, ...manager.sessionView(body.sessionId) };
     }, logger),
+    route(manager, REPAIR_PATCH_PATH, async () => ({ ok: true, ...await manager.repairPatch() }), logger),
     route(manager, EXTERNAL_DEFAULT_PATH, async (body) => ({ ok: true, ...await manager.setExternalDefault(body) }), logger),
     route(manager, SESSION_SET_PATH, async (body) => {
       if (body.reset === true) return { ok: true, ...await manager.resetSession({ sessionId: body.sessionId }) };

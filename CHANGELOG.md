@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Repair cross-layer duplicate patch declarations at boot, so an entry inserted by the
+  home patch and overridden by the profile patch becomes toggleable again.
 - Per-Session MCP visibility: the `/mcp` panel, an "MCP" View tab beside Chat and
   Trajectory, and `autoInject` defaults for tool-heavy servers.
 

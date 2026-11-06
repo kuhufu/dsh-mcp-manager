@@ -7,6 +7,7 @@
 import { createAgentRegistry } from './agents.js';
 import { formatError } from './errors.js';
 import { createExternalOperations } from './external.js';
+import { repairPatchLayers } from './patch-repair.js';
 import { createRuntime } from './runtime.js';
 import { serverView } from './routes.js';
 import { createExternalDefaults } from './external-defaults.js';
@@ -15,6 +16,7 @@ import {
   ManagerError,
   buildServerRecord,
   createStore,
+  resolveDshHome,
   validateServerInput,
   validateUi,
 } from './store.js';
@@ -148,6 +150,15 @@ export function createMcpManager({ ctx, logger }) {
       await sessionState.load();
       await externalDefaults.load();
       pruneSessions();
+      // A cross-layer duplicate cannot be toggled from the UI; repair it before
+      // the user hits that dead end. No duplicates means no write.
+      try {
+        const report = await repairPatch();
+        if (report.moved.length > 0) warn(`repaired duplicate patch entries: ${report.moved.join(', ')}`);
+        for (const problem of report.problems) warn(`patch repair: ${problem}`);
+      } catch (error) {
+        warn(`patch repair failed: ${formatError(error)}`);
+      }
       applyDesired();
     })();
     return booted;
@@ -502,6 +513,24 @@ export function createMcpManager({ ctx, logger }) {
   }
 
   /**
+   * Move home-inserted entries that the profile also overrides into the profile
+   * patch, so Plugin Manager's overrides and the insert share one ordered layer.
+   * @returns {Promise<{ moved: string[], problems: string[], backups: string[] }>} repair report.
+   */
+  function repairPatch() {
+    return enqueue(async () => {
+      const home = resolveDshHome();
+      const profile = process.env.DSH_PROFILE ?? 'desktop';
+      const report = await repairPatchLayers({
+        homePatch: `${home}/cordis.patch.yml`,
+        profilePatch: `${home}/profiles/${profile}/cordis.patch.yml`,
+      });
+      if (report.moved.length > 0) warn(`moved duplicate patch entries into the profile layer: ${report.moved.join(', ')}`);
+      return report;
+    });
+  }
+
+  /**
    * Set one external entry's deployment-wide default injection.
    * @param {{ entryId: string, autoInject: boolean }} payload - request.
    * @returns {Promise<{ entryId: string, autoInject: boolean }>} stored value.
@@ -592,6 +621,7 @@ export function createMcpManager({ ctx, logger }) {
     resetSession,
     setSessionExternalEnabled,
     setExternalDefault,
+    repairPatch,
     refreshAgents,
     runCommand,
     attachAgent,

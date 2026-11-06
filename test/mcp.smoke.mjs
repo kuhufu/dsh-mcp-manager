@@ -613,7 +613,7 @@ async function main() {
     });
   });
 
-  await test('the thirteen Fetch routes match the pinned paths and failure shape', async () => {
+  await test('the fifteen Fetch routes match the pinned paths and failure shape', async () => {
     const view = { id: 's1', name: 'alpha', status: 'ready', tools: [], toolCount: 0 };
     let railEntry = true;
     const manager = {
@@ -818,7 +818,7 @@ async function main() {
   };
 
   let pluginServerId;
-  await test('apply registers the thirteen routes on ctx.connection.fetch', () => {
+  await test('apply registers the fifteen routes on ctx.connection.fetch', () => {
     apply(ctx);
     emit('agent/created', { agent: fakeAgent });
     assert.deepEqual(
