@@ -15,6 +15,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Keep patch repair from ever leaving `cordis.patch.yml` without a top-level YAML array:
+  block-style `insert` items are handled, both files are validated before writing, and a
+  failed backup now aborts the rewrite.
 - Commit in-memory configuration only after successful persistence; retain a previous-good
   backup and protect corrupt/future-version files until explicit, archived recovery.
 - Use the initialize result for HTTP protocol negotiation; abort canceled/timed-out HTTP

@@ -606,3 +606,102 @@ test('a cross-layer duplicate is moved into the profile layer and stays disabled
   const again = await repairPatchLayers({ homePatch, profilePatch });
   assert.deepEqual(again.moved, [], 'repair is idempotent');
 });
+
+test('a block-style home insert is moved without losing the top-level array', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-block-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, [
+    '# DSH home-level user patch',
+    '',
+    '- insert:',
+    '    # rea',
+    '    - id: rea-mcp',
+    '      name: "@deepseek-ai/dsh-mcp-client"',
+    '      config:',
+    '        serverName: "rea"',
+    '        args: ["-y", "rea-agents@6.8.0", "mcp"]',
+    '',
+  ].join('\n'));
+  await writeFile(profilePatch, '- id: locale\n  config:\n    preference: zh\n- id: rea-mcp\n  disabled: true\n');
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, ['rea-mcp']);
+  const home = await readFile(homePatch, 'utf8');
+  assert.match(home, /^# DSH home-level user patch$/m, 'comments survive');
+  assert.match(home, /^\[\]$/m, 'the home patch is still a top-level array');
+  assert.doesNotMatch(home, /rea-mcp/, 'the moved entry leaves the home patch');
+
+  const profile = await readFile(profilePatch, 'utf8');
+  assert.match(profile, /^    - id: rea-mcp$/m, 'the insert declares the id in the profile layer');
+  assert.match(profile, /^- id: rea-mcp\n  disabled: true$/m, 'the override follows the insert');
+  assert.ok(profile.indexOf('- insert:') < profile.indexOf('- id: rea-mcp\n  disabled: true'));
+
+  const again = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(again.moved, [], 'repair is idempotent');
+});
+
+test('only duplicated block entries move and other home items survive', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-partial-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, [
+    '- id: keep',
+    '  config:',
+    '    count: 1',
+    '',
+    '- insert:',
+    '    - id: rea-mcp',
+    '      name: "@deepseek-ai/dsh-mcp-client"',
+    '    - id: other-mcp',
+    '      name: "@deepseek-ai/dsh-mcp-client"',
+    '',
+  ].join('\n'));
+  await writeFile(profilePatch, '- id: rea-mcp\n  disabled: true\n');
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, ['rea-mcp']);
+  const home = await readFile(homePatch, 'utf8');
+  assert.match(home, /^- id: keep$/m, 'unrelated top-level items stay');
+  assert.match(home, /^- insert:$/m, 'the remaining insert item stays');
+  assert.match(home, /- id: other-mcp/, 'unrelated inserted entries stay');
+  assert.doesNotMatch(home, /rea-mcp/);
+  assert.doesNotMatch(home, /^\[\]$/m, 'no empty array is appended when items remain');
+});
+
+test('an inline flow insert inside a block patch is moved', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-inline-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, '# header\n- id: keep\n  config: {}\n- insert: [ { id: rea-mcp, name: "@deepseek-ai/dsh-mcp-client" } ]\n');
+  await writeFile(profilePatch, '- id: rea-mcp\n  disabled: true\n');
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, ['rea-mcp']);
+  const home = await readFile(homePatch, 'utf8');
+  assert.match(home, /^- id: keep$/m);
+  assert.match(home, /^- insert: \[\]$/m);
+  assert.doesNotMatch(home, /rea-mcp/);
+  const profile = await readFile(profilePatch, 'utf8');
+  assert.match(profile, /- insert:\n    # moved from the home patch[\s\S]*- \{ id: rea-mcp/);
+});
+
+test('a patch without a top-level array is reported and left untouched', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-invalid-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  const broken = '# header only\n';
+  const profile = '- id: rea-mcp\n  disabled: true\n';
+  await writeFile(homePatch, broken);
+  await writeFile(profilePatch, profile);
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, []);
+  assert.match(report.problems[0], /not a top-level YAML array/);
+  assert.equal(await readFile(homePatch, 'utf8'), broken, 'the damaged home patch is not rewritten');
+  assert.equal(await readFile(profilePatch, 'utf8'), profile, 'the profile is not rewritten');
+});

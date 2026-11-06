@@ -10,7 +10,7 @@
  *    idempotent shutdown, environment scrubbing),
  * 3. the JSON store (atomic write, serialized concurrent writes, tolerant reads,
  *    validation rules),
- * 4. the seven Fetch routes in isolation (paths, status codes, no-store policy,
+ * 4. the Fetch routes in isolation (paths, status codes, no-store policy,
  *    failure shape, the `ui` preference echo),
  * 5. the real `index.js` plugin against a minimal fake Cordis context: routes
  *    registered, save → connect → tools on `ctx.tools` → execute, duplicate and
@@ -564,6 +564,7 @@ async function main() {
     expectInvalid({ name: 'beta', transport: 'http', url: 'ftp://example.com' }, 'url');
     expectInvalid({ name: 'beta', transport: 'http', url: 'not-a-url' }, 'url');
     expectInvalid({ name: 'beta', transport: 'stdio', command: 'node', enabled: 'yes' }, 'enabled');
+    expectInvalid({ name: 'beta', transport: 'stdio', command: 'node', autoInject: 'yes' }, 'autoInject');
     assert.throws(
       () => validateServerInput({ name: 'alpha', transport: 'stdio', command: 'node' }, { servers: existing }),
       (error) => error instanceof ManagerError && error.code === 'duplicate-name' && error.field === 'name',
@@ -599,6 +600,11 @@ async function main() {
       env: { A_B: '1' },
       cwd: '/tmp',
     });
+    assert.equal(
+      validateServerInput({ name: 'beta2', transport: 'stdio', command: 'node', autoInject: false }, {}).autoInject,
+      false,
+      'autoInject is preserved as a boolean',
+    );
 
     const http = validateServerInput(
       { name: 'web', transport: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
@@ -613,7 +619,7 @@ async function main() {
     });
   });
 
-  await test('the fifteen Fetch routes match the pinned paths and failure shape', async () => {
+  await test('the sixteen Fetch routes match the pinned paths and failure shape', async () => {
     const view = { id: 's1', name: 'alpha', status: 'ready', tools: [], toolCount: 0 };
     let railEntry = true;
     const manager = {
@@ -818,7 +824,7 @@ async function main() {
   };
 
   let pluginServerId;
-  await test('apply registers the fifteen routes on ctx.connection.fetch', () => {
+  await test('apply registers the sixteen routes on ctx.connection.fetch', () => {
     apply(ctx);
     emit('agent/created', { agent: fakeAgent });
     assert.deepEqual(

@@ -27,13 +27,16 @@ manage **Model Context Protocol** servers from the Web UI and get their tools as
   to Chat and Trajectory. `dsh-mcp-client` entries appear in the same panel;
   hiding one applies an agent-scoped `ctx.tools.restrict()` deny mask, so their globally
   registered tools disappear for that session only.
+- **Default injection.** Turn off *Inject into every session by default* for a server with many
+  tools: it stays disconnected until a session enables it from `/mcp`. `dsh-mcp-client` rows
+  have the same switch, stored separately from their profile configuration.
 - **Foreign entries are visible, not duplicated.** MCP servers already configured as separate
   `@deepseek-ai/dsh-mcp-client` rows appear with their Entry id and live tool count, and can be
   switched on or off from this page without touching their configuration.
   **Migrate here** moves one over: it disables the source row first, then copies the config into
   this page and connects — so two connections never compete for the same tool names.
 - **No dependencies.** A small, self-contained MCP client (stdio JSON-RPC + Streamable HTTP),
-  atomic JSON persistence, and fourteen exact Fetch routes. No build step.
+  atomic JSON persistence, and exact Fetch routes. No build step.
 
 ## Screenshots
 
@@ -133,8 +136,10 @@ the whole tool set atomically.
 
 - Records live in `$DSH_HOME/storages/mcp-manager.json` (`$DSH_HOME` defaults to `~/.dsh`);
   per-session `/mcp` overrides live in `storages/mcp-manager-sessions.json` beside it,
-  written atomically with `0600` permissions. Memory is committed only after persistence succeeds.
-  The previous valid document is retained in `.bak`.
+  written atomically with `0600` permissions. External-entry default-injection preferences live
+  in `storages/mcp-manager-external.json`; only entries turned off are recorded there, so the
+  profile remains the source of truth for the entries themselves. Memory is committed only after
+  persistence succeeds. The previous valid document is retained in `.bak`.
 - Corrupt, unreadable, or unsupported-version documents lock writes and offer backup restoration
   or reset. Either action archives the original bytes in `.recovery-<time>-<uuid>`. Legacy
   documents without `version` or `ui` remain readable and migrate on the next write.
@@ -149,7 +154,7 @@ the whole tool set atomically.
 
 | Part | File | Role |
 | --- | --- | --- |
-| Host | `index.js` + `host/manager.js`, `runtime.js`, `external.js`, `mcp.js`, `store.js`, `routes.js` | Owns records, MCP connections, tool registration and the Fetch routes. |
+| Host | `index.js` + `host/manager.js`, `runtime.js`, `agents.js`, `external.js`, `external-defaults.js`, `session-state.js`, `profile-patch.js`, `patch-repair.js`, `mcp.js`, `store.js`, `routes.js` | Owns records, MCP connections, tool registration and the Fetch routes. |
 | Client | `client.js` | One React page registered into `settings.section`, plus the optional `sidebar.panellist` + `main` pair. |
 
 All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
@@ -161,6 +166,8 @@ All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
 | `save` / `remove` / `toggle` / `reconnect` | Server mutations |
 | `takeover` | Disable a `dsh-mcp-client` entry and re-create it as a managed record |
 | `toggle-external` | Enable or disable a `dsh-mcp-client` entry |
+| `external-default` | A `dsh-mcp-client` entry's default-injection preference |
+| `repair-patch` | Move duplicate home-patch inserts into the profile patch |
 | `ui` | The `railEntry` preference |
 | `session` / `session-set` | A session's visibility overrides (`/mcp`) |
 | `import` / `export` | Atomic batch import and credential-optional export |

@@ -15,7 +15,9 @@ Both halves are plain JavaScript (no build step). The Client half is a browser b
 - `host/agents.js`: per-agent tool registration and `/mcp` visibility sync.
 - `host/session-state.js`: persisted per-session visibility overrides.
 - `host/external.js`: Loader entry enablement and migration.
+- `host/external-defaults.js`: persisted default-injection flags for foreign entries.
 - `host/profile-patch.js`: targeted profile-patch repair with a backup.
+- `host/patch-repair.js`: cross-layer duplicate repair with a top-level-array guard.
 - `host/errors.js`: shared Host diagnostic formatting.
 - `host/mcp.js`, `host/store.js`, `host/routes.js`: transport, persistence and wire adapters.
 - `client.js`: one browser factory containing a data hook and React components for recovery,
@@ -48,6 +50,7 @@ Host-owned JSON at `<DSH_HOME>/storages/mcp-manager.json` (`DSH_HOME` env, else 
   initializeTimeoutMs?: number  // integer 1000–300000; default 30000
   retryCount?: number           // integer 0–10; default 0 (no automatic retries)
   disabledTools?: string[]      // raw names; preserved across reconnect/list changes
+  autoInject?: boolean          // default true; false connects only when a Session shows it
 }
 ```
 
@@ -62,6 +65,16 @@ Invalid or duplicate individual records are skipped with warnings; valid records
 its original bytes so tolerated bad records are not silently discarded.
 Recovery archives the original bytes in `mcp-manager.json.recovery-<time>-<uuid>` before restoring
 the validated backup or resetting to defaults. No damaged document is silently overwritten.
+
+Foreign `dsh-mcp-client` entries keep their configuration in the profile patch; their
+default-injection flags live in `<DSH_HOME>/storages/mcp-manager-external.json`:
+
+```json
+{ "version": 1, "entries": { "<entryId>": false } }
+```
+
+Only entries turned off are recorded, so an entry injected by default stays absent. The file is
+written atomically; a corrupt document degrades to "inject every entry" instead of failing boot.
 
 ## Runtime status (not persisted)
 
@@ -103,6 +116,8 @@ so it resolves under both the Web server and the desktop carrier.
 | `/api/mcp-manager.export` | `{ includeSecrets?: boolean }` | `{ ok: true, document: { version: 1, servers: ServerInput[] } }` |
 | `/api/mcp-manager.recover` | `{ mode: "backup" | "reset" }` | `{ ok: true, servers: ServerView[], archive?: string }` |
 | `/api/mcp-manager.tool` | `{ id, name: string, enabled: boolean }` | `{ ok: true, servers: ServerView[] }` |
+| `/api/mcp-manager.external-default` | `{ entryId, autoInject: boolean }` | `{ ok: true, entryId, autoInject }` |
+| `/api/mcp-manager.repair-patch` | `{}` | `{ ok: true, moved: string[], problems: string[], backups: string[] }` |
 | `/api/mcp-manager.session` | `{ sessionId }` | `{ ok: true, sessionId, overrides, servers: SessionServerView[] }` |
 | `/api/mcp-manager.session-set` | `{ sessionId, serverId, enabled: boolean \| null }` | `{ ok: true, sessionId, overrides, servers: SessionServerView[] }` |
 | `/api/mcp-manager.session-set` | `{ sessionId, reset: true }` | Same session payload; atomically clears both managed and external overrides |
@@ -152,6 +167,7 @@ ExternalView = {
   enabled: boolean           // entry.disabled === false
   shadowed: boolean          // a managed record with this name exists; the switch is disabled
   toolCount: number          // live ctx.tools names starting with `mcp__<serverName>__`
+  autoInject: boolean        // default-injection preference from mcp-manager-external.json
 }
 ```
 
@@ -163,6 +179,13 @@ for that id are dropped, the declaration carrying the configuration is kept, and
 as `cordis.patch.yml.bak-<timestamp>` first, only that exact shape is touched (anything else keeps
 the `overridden` failure), and the response carries `repaired: true`. The migration performs the
 same repair when it cannot disable its source row.
+
+`repair-patch` handles the cross-layer variant: an entry inserted by the home patch and overridden
+by the profile patch. `host/patch-repair.js` moves the insert into the profile layer, re-emits the
+last override after it, and backs both files up. It accepts flow-style and block-style `insert`
+items, and verifies both files still begin with a top-level YAML array before writing; otherwise
+it returns the problem and leaves the files untouched. `boot()` runs it once, so a stuck row is
+repaired before the user opens the page.
 
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
@@ -181,6 +204,7 @@ Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 - `name` must match `^[A-Za-z0-9_-]{1,32}$` and be unique (case-sensitive) among other servers.
 - `transport: "stdio"` requires a non-empty `command`; `http` requires an absolute `http(s)` `url`.
 - `env`/`headers` entries: string keys, string values; keys match `^[A-Za-z_][A-Za-z0-9_]*$` for env.
+- `autoInject`, when present, must be a boolean (default `true`).
 - Saving an existing `id` replaces the record and reconciles the connection in place
   (restart if the connection-relevant fields changed).
 - A failed connection never deletes the record: it shows `status: "error"` with `error`.
@@ -198,12 +222,12 @@ configuration:
   its tools from that Session's Agent only. Unloading the plugin releases every registration.
 - A server stays connected while any Session explicitly shows it, so `/mcp on` can reveal a
   globally disabled server without enabling it for everyone.
-- `repair-patch` moves a home-patch `insert` into the profile patch when the profile
-  also overrides that id: the two layers apply in a fixed order, so such an entry can never
-  be toggled. `boot()` runs it once (no duplicates means no write) and the route exposes it.
 - `session` / `session-set` are the panel's routes; `SessionServerView` is
-  `{ id, name, enabled, status, toolCount, visible }`, and the same payload carries
-  `external: { entryId, serverName, enabled, toolCount, visible }[]`.
+  `{ id, name, enabled, status, toolCount, autoInject, visible }`, and the same payload carries
+  `external: { entryId, serverName, enabled, toolCount, autoInject, visible }[]`.
+- `autoInject: false` on a managed server or a foreign entry makes it default-off: it stays
+  disconnected (or unregistered) until a Session explicitly shows it with `/mcp on`. The
+  preference persists in the server record or `mcp-manager-external.json`, not in session state.
 - External `dsh-mcp-client` entries register their tools globally, so hiding one for a Session is
   `agent.ctx.tools.restrict({ deny: [...] })` over that entry's `mcp__<server>__*` names in the
   unfiltered Host catalog (the documented agent-scoped deny mask). Migrated entries whose

@@ -8,8 +8,11 @@
  * this module moves the inserting entry into the profile layer, where overrides
  * and the insert share one ordered list.
  *
- * Only flow-style `insert` arrays are handled; anything unexpected is reported
- * as a problem and the files are left untouched.
+ * Both patch styles are handled: a flow-style `insert: [ ... ]` array and a
+ * block-style `- insert:` item. A patch file is only rewritten when the result
+ * still begins with a top-level YAML array; otherwise the files are left
+ * untouched and the problem is reported. That check matters because a patch
+ * without a top-level array makes the whole Harness fail at startup.
  *
  * @module @kuhufu/dsh-mcp-manager/host/patch-repair
  */
@@ -17,12 +20,12 @@
 import { copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-/** @typedef {{ id: string, text: string }} FlowEntry */
+/** @typedef {{ id: string, text: string, start?: number, end?: number }} PatchEntry */
 
 /**
- * Find the `insert:` array in a patch document and return its balanced span.
+ * Find the first flow-style `insert:` array and return its balanced span.
  * @param {string} text - patch file contents.
- * @returns {{ start: number, end: number, entries: FlowEntry[] } | undefined} span and entries.
+ * @returns {{ start: number, end: number, entries: PatchEntry[] } | undefined} span and entries.
  */
 export function findFlowInsert(text) {
   const marker = /(^|[\s[{,])insert\s*:/m.exec(text);
@@ -32,7 +35,18 @@ export function findFlowInsert(text) {
   const close = matchBracket(text, open, '[', ']');
   if (close < 0) return undefined;
   const body = text.slice(open + 1, close);
-  /** @type {FlowEntry[]} */
+  const entries = flowEntries(body);
+  if (entries === undefined) return undefined;
+  return { start: open, end: close, entries };
+}
+
+/**
+ * Extract the entries of a flow-style `insert` body.
+ * @param {string} body - text between the insert array brackets.
+ * @returns {PatchEntry[] | undefined} entries, or undefined for an unsupported shape.
+ */
+function flowEntries(body) {
+  /** @type {PatchEntry[]} */
   const entries = [];
   let index = 0;
   while (index < body.length) {
@@ -46,7 +60,71 @@ export function findFlowInsert(text) {
     entries.push({ id: id[1], text: entryText });
     index = end + 1;
   }
+  return entries;
+}
+
+/**
+ * Find a block-level item written as `- insert: [...]`.
+ * @param {string} text - patch file contents.
+ * @returns {{ start: number, end: number, entries: PatchEntry[] } | undefined} span and entries.
+ */
+function findInlineFlowInsert(text) {
+  const marker = /^-\s+insert\s*:\s*\[/m.exec(text);
+  if (marker === null) return undefined;
+  const open = text.indexOf('[', marker.index);
+  const close = matchBracket(text, open, '[', ']');
+  if (close < 0) return undefined;
+  const entries = flowEntries(text.slice(open + 1, close));
+  if (entries === undefined) return undefined;
   return { start: open, end: close, entries };
+}
+
+/**
+ * Find the first block-style top-level `- insert:` item and its entries.
+ *
+ * Only the item itself is parsed: the entries are the `- id:` sequence items
+ * below it, and the item ends at the next top-level sequence item. Nested
+ * sequences (arguments, config lists) are left alone.
+ *
+ * @param {string} text - patch file contents.
+ * @returns {{ start: number, end: number, entries: PatchEntry[], block: true } | undefined} item span and entries.
+ */
+export function findBlockInsert(text) {
+  const lines = lineSpans(text);
+  const index = lines.findIndex((line) => /^-\s+insert\s*:\s*(?:#.*)?$/.test(line.text));
+  if (index < 0) return undefined;
+  const start = lines[index].start;
+  let end = text.length;
+  for (let next = index + 1; next < lines.length; next += 1) {
+    if (/^-\s/.test(lines[next].text)) {
+      end = lines[next].start;
+      break;
+    }
+  }
+  /** @type {PatchEntry[]} */
+  const entries = [];
+  let indent;
+  for (let line = index + 1; line < lines.length && lines[line].start < end; line += 1) {
+    const match = /^(\s+)-\s+id\s*:\s*["']?([A-Za-z0-9._:-]+)["']?\s*(?:#.*)?$/.exec(lines[line].text);
+    if (match === null) continue;
+    const width = match[1].length;
+    if (indent === undefined) indent = width;
+    if (width !== indent) continue;
+    let entryEnd = end;
+    for (let next = line + 1; next < lines.length && lines[next].start < end; next += 1) {
+      if (lines[next].text.startsWith(`${' '.repeat(width)}- `)) {
+        entryEnd = lines[next].start;
+        break;
+      }
+    }
+    entries.push({
+      id: match[2],
+      text: text.slice(lines[line].start, entryEnd).trimEnd(),
+      start: lines[line].start,
+      end: entryEnd,
+    });
+  }
+  return entries.length === 0 ? undefined : { start, end, entries, block: true };
 }
 
 /**
@@ -95,7 +173,7 @@ export function declaredIds(text) {
  * @returns {boolean | undefined} the last declared value.
  */
 function lastDisabledOverride(text, id) {
-  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\s*$\\n\\s+disabled\\s*:\\s*(true|false)\\s*$`, 'gm');
+  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*$\\n\\s+disabled\\s*:\\s*(true|false)\\s*$`, 'gm');
   let last;
   for (const match of text.matchAll(pattern)) last = match[1] === 'true';
   return last;
@@ -108,8 +186,7 @@ function lastDisabledOverride(text, id) {
  * @returns {string} contents without that block.
  */
 function stripDisabledOverride(text, id) {
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${escaped}["']?\\s*\\n\\s+disabled\\s*:\\s*(?:true|false)\\s*\\n?`, 'gm');
+  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*\\n\\s+disabled\\s*:\\s*(?:true|false)\\s*\\n?`, 'gm');
   return text.replace(pattern, '');
 }
 
@@ -122,45 +199,194 @@ function stripDisabledOverride(text, id) {
 export async function repairPatchLayers({ homePatch, profilePatch, stamp = String(Date.now()) }) {
   /** @type {string[]} */
   const problems = [];
-  /** @type {string[]} */
   const backups = [];
   const homeText = await readFile(homePatch, 'utf8').catch(() => undefined);
   if (homeText === undefined) return { moved: [], problems: [`cannot read ${homePatch}`], backups };
   const profileText = await readFile(profilePatch, 'utf8').catch(() => undefined);
   if (profileText === undefined) return { moved: [], problems: [`cannot read ${profilePatch}`], backups };
 
-  const insert = findFlowInsert(homeText);
-  if (insert === undefined || insert.entries.length === 0) return { moved: [], problems: [], backups };
+  const homeShape = patchShape(homeText);
+  if (homeShape === 'invalid') {
+    return { moved: [], problems: [`${homePatch} is not a top-level YAML array`], backups };
+  }
+  const profileShape = patchShape(profileText);
+  if (profileShape === 'invalid') {
+    return { moved: [], problems: [`${profilePatch} is not a top-level YAML array`], backups };
+  }
+
+  const insert = homeShape === 'block'
+    ? findBlockInsert(homeText) ?? findInlineFlowInsert(homeText)
+    : findFlowInsert(homeText);
+  if (insert === undefined || insert.entries.length === 0) return { moved: [], problems, backups };
 
   const profileIds = declaredIds(profileText);
   const moving = insert.entries.filter((entry) => profileIds.has(entry.id));
-  if (moving.length === 0) return { moved: [], problems: [], backups };
+  if (moving.length === 0) return { moved: [], problems, backups };
+  const movingIds = new Set(moving.map((entry) => entry.id));
 
-  const keep = insert.entries.filter((entry) => !profileIds.has(entry.id));
-  const replacement = keep.length === 0 ? '[]' : `[ ${keep.map((entry) => entry.text).join(', ')} ]`;
-  const nextHome = homeText.slice(0, insert.start) + replacement + homeText.slice(insert.end + 1);
-  // The moved insert now sits in the same ordered list as the overrides, so it
-  // must come first and the last override must be re-emitted after it: a later
-  // declaration wins, and the user's enabled/disabled choice must survive.
-  const trailing = moving
-    .map((entry) => {
-      const override = lastDisabledOverride(profileText, entry.id);
-      return override === undefined ? '' : `- id: ${entry.id}\n  disabled: ${override}\n`;
-    })
-    .join('');
-  const appended = moving
-    .map((entry) => `- insert:\n    # moved from the home patch: overrides must share its layer\n    - ${entry.text}\n`)
-    .join('') + trailing;
-  // Drop the old override blocks: the trailing copy replaces them, so each moved
-  // id keeps exactly one declaration and one override, in that order.
-  let stripped = profileText;
-  for (const entry of moving) stripped = stripDisabledOverride(stripped, entry.id);
-  const nextProfile = `${stripped.trimEnd()}\n${appended}`;
+  const nextHome = insert.block === true
+    ? removeBlockEntries(homeText, insert, movingIds)
+    : removeFlowEntries(homeText, insert, movingIds);
+  if (patchShape(nextHome) === 'invalid') {
+    return { moved: [], problems: [`${homePatch} would no longer be a top-level YAML array`], backups };
+  }
+
+  const nextProfile = appendToProfile(profileText, moving);
+  if (nextProfile === undefined) {
+    return { moved: [], problems: [`${profilePatch} is not a block-style patch; refusing to append`], backups };
+  }
+  if (patchShape(nextProfile) === 'invalid') {
+    return { moved: [], problems: [`${profilePatch} would no longer be a top-level YAML array`], backups };
+  }
 
   backups.push(await backup(homePatch, stamp), await backup(profilePatch, stamp));
-  await writeAtomic(homePatch, nextHome);
+  // Write the profile first: if the home write then fails, the entry exists in
+  // both layers (a duplicate, repaired on the next run) instead of being lost.
   await writeAtomic(profilePatch, nextProfile);
+  await writeAtomic(homePatch, nextHome);
   return { moved: moving.map((entry) => entry.id), problems, backups };
+}
+
+/**
+ * Drop the moved entries from a flow-style insert array.
+ * @param {string} text - home patch contents.
+ * @param {{ start: number, end: number, entries: PatchEntry[] }} insert - flow span.
+ * @param {Set<string>} movingIds - ids leaving this file.
+ * @returns {string} new home patch contents.
+ */
+function removeFlowEntries(text, insert, movingIds) {
+  const keep = insert.entries.filter((entry) => !movingIds.has(entry.id));
+  const replacement = keep.length === 0 ? '[]' : `[ ${keep.map((entry) => entry.text).join(', ')} ]`;
+  return text.slice(0, insert.start) + replacement + text.slice(insert.end + 1);
+}
+
+/**
+ * Drop the moved entries from a block-style insert item, keeping the file a
+ * top-level array when that item was the last declaration.
+ * @param {string} text - home patch contents.
+ * @param {{ start: number, end: number, entries: PatchEntry[] }} insert - block span.
+ * @param {Set<string>} movingIds - ids leaving this file.
+ * @returns {string} new home patch contents.
+ */
+function removeBlockEntries(text, insert, movingIds) {
+  const allMove = insert.entries.every((entry) => movingIds.has(entry.id));
+  if (allMove) {
+    const remaining = text.slice(0, insert.start) + text.slice(insert.end);
+    return patchShape(remaining) === 'invalid' ? `${remaining.trimEnd()}\n[]\n` : remaining;
+  }
+  let next = text;
+  for (const entry of [...insert.entries].reverse()) {
+    if (!movingIds.has(entry.id)) continue;
+    next = next.slice(0, entry.start) + next.slice(entry.end);
+  }
+  return next;
+}
+
+/**
+ * Append the moved entries to the profile patch, after removing their stale
+ * standalone override blocks. The trailing override keeps the user's choice.
+ * @param {string} profileText - current profile patch contents.
+ * @param {PatchEntry[]} moving - entries to move.
+ * @returns {string | undefined} new contents, or undefined for an unsupported shape.
+ */
+function appendToProfile(profileText, moving) {
+  let stripped = profileText;
+  for (const entry of moving) stripped = stripDisabledOverride(stripped, entry.id);
+  let base = stripped.trimEnd();
+  const shape = patchShape(base);
+  if (shape === 'flow') {
+    if (!isEmptyArray(base)) return undefined; // appending a block item to a flow array is invalid
+    base = '';
+  } else if (shape === 'invalid' && base.trim() !== '') {
+    return undefined;
+  }
+  const appended = moving
+    .map((entry) => {
+      const override = lastDisabledOverride(profileText, entry.id);
+      const trailing = override === undefined ? '' : `- id: ${entry.id}\n  disabled: ${override}\n`;
+      return `${insertSnippet(entry)}\n${trailing}`;
+    })
+    .join('');
+  return base === '' ? appended : `${base}\n${appended}`;
+}
+
+/**
+ * Render one moved entry as a profile-level insert item.
+ * @param {PatchEntry} entry - entry from the home patch.
+ * @returns {string} YAML block.
+ */
+function insertSnippet(entry) {
+  const raw = entry.text.trimEnd();
+  if (!raw.trimStart().startsWith('-')) {
+    return `- insert:\n    # moved from the home patch: overrides must share its layer\n    - ${raw.trim()}\n`;
+  }
+  // Re-anchor the entry at the four-space indent of a nested insert sequence.
+  const leading = raw.length - raw.trimStart().length;
+  const shift = 4 - leading;
+  const lines = raw.split('\n').map((line, index) => {
+    if (index === 0) return `${' '.repeat(4)}${line.trimStart()}`;
+    if (shift >= 0) return `${' '.repeat(shift)}${line}`;
+    let next = line;
+    for (let remove = -shift; remove > 0 && next.startsWith(' '); remove -= 1) next = next.slice(1);
+    return next;
+  });
+  return `- insert:\n    # moved from the home patch: overrides must share its layer\n${lines.join('\n')}\n`;
+}
+
+/**
+ * Whether a patch's first meaningful line starts a top-level array.
+ * @param {string} text - patch file contents.
+ * @returns {'flow' | 'block' | 'invalid'} shape.
+ */
+function patchShape(text) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#') || line === '---') continue;
+    if (line.startsWith('[')) return 'flow';
+    if (line.startsWith('-')) return 'block';
+    return 'invalid';
+  }
+  return 'invalid';
+}
+
+/**
+ * Whether the only meaningful content is an empty flow array (`[]`).
+ * @param {string} text - patch file contents.
+ * @returns {boolean} true for comments plus `[]`.
+ */
+function isEmptyArray(text) {
+  const lines = text.split(/\r?\n/).filter((line) => {
+    const trimmed = line.trim();
+    return trimmed !== '' && !trimmed.startsWith('#') && trimmed !== '---';
+  });
+  return lines.length === 1 && /^\[\s*\]$/.test(lines[0].trim());
+}
+
+/**
+ * Split text into lines with their absolute offsets.
+ * @param {string} text - haystack.
+ * @returns {{ start: number, end: number, text: string }[]} line records without the newline.
+ */
+function lineSpans(text) {
+  const lines = [];
+  let start = 0;
+  while (start <= text.length) {
+    const newline = text.indexOf('\n', start);
+    const end = newline === -1 ? text.length : newline;
+    lines.push({ start, end, text: text.slice(start, end).replace(/\r$/, '') });
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return lines;
+}
+
+/**
+ * Escape one literal for use inside a RegExp.
+ * @param {string} value - literal text.
+ * @returns {string} escaped text.
+ */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -171,7 +397,7 @@ export async function repairPatchLayers({ homePatch, profilePatch, stamp = Strin
  */
 async function backup(file, stamp) {
   const target = `${file}.bak-${stamp}`;
-  await copyFile(file, target).catch(() => {});
+  await copyFile(file, target);
   return target;
 }
 

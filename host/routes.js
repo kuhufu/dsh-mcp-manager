@@ -116,7 +116,7 @@ class BodyError extends Error {
 }
 
 /**
- * Build the twelve Fetch route descriptors for a manager.
+ * Build the Fetch route descriptors for a manager.
  *
  * @param {ReturnType<import('./manager.js').createMcpManager>} manager - complete Host manager interface.
  * @param {{ logger?: { error?: (message: string) => void } }} [options] - diagnostics sink.

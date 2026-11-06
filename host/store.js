@@ -221,7 +221,12 @@ export function validateServerInput(input, context = {}) {
   if (input.disabledTools !== undefined) {
     normalized.disabledTools = [...new Set(normalizeStringList(input.disabledTools, 'disabledTools'))];
   }
-  if (input.autoInject !== undefined) normalized.autoInject = input.autoInject;
+  if (input.autoInject !== undefined) {
+    if (typeof input.autoInject !== 'boolean') {
+      throw new ManagerError('invalid', 'autoInject must be a boolean', 'autoInject');
+    }
+    normalized.autoInject = input.autoInject;
+  }
   return normalized;
 }
 
