@@ -2113,9 +2113,16 @@ window.__ModuleLoader__.load({
 .dshmcp-session-page .dshmcp-session-head{align-items:center}
 .dshmcp-session-page .dshmcp-session-title{font-size:16px;line-height:24px}
 .dshmcp-session-page .dshmcp-session-list{max-height:none;overflow:visible}
-.dshmcp-session-page .dshmcp-session-row{min-height:38px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform)}
-.dshmcp-session-page .dshmcp-session-section{padding-top:16px;margin-top:4px}
-.dshmcp-session-page .dshmcp-session-foot{padding-top:8px}
+.dshmcp-session-page .dshmcp-session-list{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);overflow:hidden}
+.dshmcp-session-page .dshmcp-session-row{min-height:48px;padding:0 14px;border:0;border-top:.5px solid var(--dsw-alias-border-l1);border-radius:0;background:transparent;gap:10px}
+.dshmcp-session-page .dshmcp-session-row:first-child{border-top:0}
+.dshmcp-session-page .dshmcp-session-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshmcp-session-page .dshmcp-session-name{font-size:14px;line-height:22px}
+.dshmcp-session-page .dshmcp-session-subtitle{font-size:13px;line-height:20px;margin-top:4px}
+.dshmcp-session-page .dshmcp-session-section{border-top:0;padding-top:24px;margin-top:0;gap:6px}
+.dshmcp-session-page .dshmcp-session-badge{border:0;padding:0;color:var(--dsw-alias-label-tertiary)}
+.dshmcp-session-page .dshmcp-session-hint{color:var(--dsw-alias-label-tertiary)}
+.dshmcp-session-page .dshmcp-session-foot{padding-top:12px}
 `;
 
     /**
