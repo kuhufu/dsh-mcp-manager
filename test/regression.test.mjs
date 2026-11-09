@@ -268,6 +268,30 @@ test('direct MCP JSON import accepts VS Code servers objects and de-duplicates n
   assert.equal(record.enabled, false);
 });
 
+test('direct MCP JSON import accepts arrays and respects source enablement', async (t) => {
+  const { manager } = await managerFixture(t);
+  const routes = createFetchRoutes(manager);
+  const call = async (action, body) => (await routes.find((route) => route.path.endsWith('.' + action)).fetch(new Request('http://localhost/', { method: 'POST', body: JSON.stringify(body) }))).json();
+
+  const array = await call('import-json', {
+    document: [{ name: 'array-server', command: 'node', enabled: false }],
+    enable: true,
+  });
+  assert.equal(array.ok, true);
+  assert.equal(array.imported, 1);
+  assert.equal(array.enabled, 0, 'a source enabled:false stays disabled');
+  assert.equal(manager.list()[0].enabled, false);
+  assert.ok(array.warnings.some((warning) => warning.kind === 'note' && warning.reason === 'source-disabled'));
+
+  const quiet = await call('import-json', {
+    document: { mcpServers: { quiet: { command: 'node', autoInject: false } } },
+    enable: true,
+  });
+  assert.equal(quiet.ok, true);
+  assert.equal(quiet.enabled, 0, 'autoInject:false is enabled but starts no connection');
+  assert.equal(manager.list().find((server) => server.name === 'quiet').enabled, true);
+});
+
 test('direct MCP JSON import rejects documents without usable servers', async (t) => {
   const { manager } = await managerFixture(t);
   const routes = createFetchRoutes(manager);
@@ -618,6 +642,34 @@ test('saving cwd and timeout edits reconnects; default injection edits update at
   assert.equal(manager.list()[0].logs.filter((log) => log.message === 'Connecting').length, count);
 });
 
+test('a successful connection resets the retry budget', async (t) => {
+  const { manager } = await managerFixture(t);
+  const saved = await manager.save({
+    server: {
+      name: 'flaky',
+      transport: 'stdio',
+      command: '/nonexistent-mcp-flaky',
+      retryCount: 1,
+    },
+  });
+  await until(() => {
+    const row = manager.list()[0];
+    return row.status === 'error' && row.retryAttempt === 1 && !row.nextRetryAt;
+  });
+  await manager.save({
+    id: saved.id,
+    server: {
+      name: 'flaky',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [path.join(import.meta.dirname, 'fake-server.mjs')],
+      retryCount: 1,
+    },
+  });
+  await until(() => manager.list()[0].status === 'ready');
+  assert.equal(manager.list()[0].retryAttempt, 0, 'a successful generation starts a fresh retry budget');
+});
+
 test('a per-session override connects a default-off server on demand', async (t) => {
   const { manager, tools } = await managerFixture(t);
   const url = await http(t, (req, res, body) => {
@@ -794,6 +846,52 @@ test('an inline flow insert inside a block patch is moved', async (t) => {
   assert.doesNotMatch(home, /rea-mcp/);
   const profile = await readFile(profilePatch, 'utf8');
   assert.match(profile, /- insert:\n    # moved from the home patch[\s\S]*- \{ id: rea-mcp/);
+});
+
+test('a nested profile insert is not mistaken for a bare override', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-nested-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, '- insert:\n    - id: rea\n      name: home\n');
+  const profile = [
+    '# header',
+    '- insert:',
+    '    # nested source row',
+    '    - id: rea',
+    '      disabled: true',
+    '      name: "@deepseek-ai/dsh-mcp-client"',
+    '      config:',
+    '        serverName: rea',
+    '',
+  ].join('\n');
+  await writeFile(profilePatch, profile);
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, [], 'an already-inserted id is refused instead of merged');
+  assert.match(report.problems[0], /already inserts/);
+  const after = await readFile(profilePatch, 'utf8');
+  assert.equal(after, profile, 'the profile is left untouched');
+  assert.match(await readFile(homePatch, 'utf8'), /- id: rea/, 'the home patch is left untouched');
+  assert.doesNotMatch(after, /^name:/m, 'no line is de-indented');
+});
+
+test('an id already inserted by the profile is refused instead of duplicated', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-repair-existing-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homePatch = path.join(dir, 'home.yml');
+  const profilePatch = path.join(dir, 'profile.yml');
+  await writeFile(homePatch, '- insert:\n    - id: rea\n      name: home\n');
+  await writeFile(profilePatch, '- id: locale\n  config:\n    preference: zh\n- insert:\n    - id: rea\n      name: profile\n- id: rea\n  disabled: true\n');
+
+  const report = await repairPatchLayers({ homePatch, profilePatch });
+  assert.deepEqual(report.moved, [], 'the repair refuses to merge two inserts');
+  assert.match(report.problems[0], /already inserts/);
+  const after = await readFile(profilePatch, 'utf8');
+  assert.equal(after.match(/^- insert:$/gm)?.length ?? 0, 1, 'the existing profile insert is not duplicated');
+  assert.equal(after.match(/^    - id: rea$/gm)?.length ?? 0, 1, 'rea is inserted once');
+  assert.equal(after.match(/^- id: rea\n  disabled: true$/m)?.length ?? 0, 1, 'the override still follows');
+  assert.match(await readFile(homePatch, 'utf8'), /- id: rea/, 'the home patch is left untouched');
 });
 
 test('a patch without a top-level array is reported and left untouched', async (t) => {

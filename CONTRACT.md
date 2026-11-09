@@ -19,7 +19,7 @@ Both halves are plain JavaScript (no build step). The Client half is a browser b
 - `host/profile-patch.js`: targeted profile-patch repair with a backup.
 - `host/patch-repair.js`: cross-layer duplicate repair with a top-level-array guard.
 - `host/errors.js`: shared Host diagnostic formatting.
-- `host/mcp.js`, `host/store.js`, `host/routes.js`: transport, persistence and wire adapters.
+- `host/mcp.js`, `host/mcp-json.js`, `host/store.js`, `host/routes.js`: transport, third-party import normalization, persistence and wire adapters.
 - `client.js`: one browser factory containing a data hook and React components for recovery,
   transfer and presentation; these are logical boundaries within the same distributable file.
 
@@ -136,12 +136,12 @@ Tool switches use raw names from the current advertised catalog; unknown names f
 `import-json` is the direct path for a document written by another client; the page's paste box
 sends it after stripping JSONC comments and trailing commas. Accepted shapes, tried in order:
 `{ mcpServers: { name: config } }` (Claude Desktop, Claude Code, Cursor), a `servers` object
-(VS Code; sibling `inputs` is ignored) or this bundle's own `servers` array, one server object,
-or a bare `{ name: config }` map. Entries are resolved individually: unusable ones become
+(VS Code; sibling `inputs` is ignored) or this bundle's own `servers` array, a top-level server
+array, one server object, or a bare `{ name: config }` map. Entries are resolved individually: unusable ones become
 `skipped` warnings and the rest still import, in one atomic write. `enable` defaults to `true`;
 imported servers are persisted enabled, and the manager reconciles connections before replying,
-so `enabled` counts records that are starting now. A source entry with `"disabled": true` stays
-disabled and is reported as a `note`.
+so `enabled` counts enabled records that are not default-off (`autoInject !== false`). A source
+entry with `"disabled": true` or `"enabled": false` stays disabled and is reported as a `note`.
 
 Names are coerced to the tool-namespace grammar (`^[A-Za-z0-9_-]{1,32}$`): invalid runs become
 `-`, leading/trailing dashes are trimmed, an empty result becomes `server`, and a collision with
@@ -171,9 +171,10 @@ ImportWarning =
 with the same `name`, keeping its id, so a broken row can be repaired in place): it validates the
 copied configuration, disables the source Loader entry through `pluginManager.setPluginEnabled`
 first (so its tools and child process are gone before this bundle registers the same
-`mcp__<server>__<tool>` names), then persists and connects the new record. A failure after the
-source was disabled re-enables it; a validation failure touches nothing. `warnings` reports
-copied environment values and headers, which land in this page's storage as plain text.
+`mcp__<server>__<tool>` names), then persists the new record with the source's enablement (a disabled source stays disabled)
+and connects it only when enabled. A failure after the source was disabled re-enables it; a
+validation failure touches nothing. `warnings` reports copied environment values and headers,
+which land in this page's storage as plain text.
 
 Every success response also carries `ui: { railEntry: boolean }` — the page-level preference
 that decides whether this bundle also adds a left-rail entry (default `true`). The rail entry
@@ -218,8 +219,9 @@ same repair when it cannot disable its source row.
 by the profile patch. `host/patch-repair.js` moves the insert into the profile layer, re-emits the
 last override after it, and backs both files up. It accepts flow-style and block-style `insert`
 items, and verifies both files still begin with a top-level YAML array before writing; otherwise
-it returns the problem and leaves the files untouched. `boot()` runs it once, so a stuck row is
-repaired before the user opens the page.
+it returns the problem and leaves the files untouched. If the profile already inserts the same
+id, the repair refuses instead of creating a duplicate declaration. `boot()` runs it once, so a
+stuck row is repaired before the user opens the page.
 
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
@@ -274,7 +276,8 @@ configuration:
   full page. No Conversation target is registered; the View reads `api/mcp-manager.session`.
   The View is the only header-level entry: there is no separate header action button.
 - Client data is a module-level snapshot behind `dataListeners`; one process-wide timer polls
-  only while a server is connecting, and the stylesheet is injected once from `apply()`.
+  only while a server is connecting or waiting on an automatic retry, and the stylesheet is
+  injected once from `apply()`.
 - Command and panel reset both clear the Session's managed and external overrides in one
   persisted operation. Failed writes preserve the previous in-memory state. Panel responses
   apply only to the Session and opening/request generation that issued them.
@@ -355,8 +358,9 @@ ctx.slots.inject("settings.section", () => ctx.slots.register({
   disabled draft with a unique name. Import/export and confirmed recovery are inline sections
   before the final sidebar preference row.
 - All visible text goes through `t(...)`; dictionaries cover English and Simplified Chinese.
-- After every mutation, render the `servers` array from the response. Poll `.list` every 5 s
-  while mounted (cleared on unmount) so `connecting`/`error` states settle.
+- After every mutation, render the `servers` array from the response. A 5 s timer exists while
+  mounted (cleared on unmount) but each tick reads only while a server is connecting or has a
+  scheduled retry, so retry transitions are observed without an idle request loop.
 
 ### Theme tokens
 
@@ -369,6 +373,7 @@ Colour: `--dsw-alias-bg-base`, `--dsw-alias-bg-layer-1`, `--dsw-alias-bg-layer-2
 `--dsw-alias-button-primary-fill`, `--dsw-alias-button-primary-hover`,
 `--dsw-alias-interactive-bg-hover`, `--dsw-alias-label-primary`,
 `--dsw-alias-label-primary-foreground`, `--dsw-alias-label-secondary`,
+`--dsw-alias-label-tertiary`, `--dsw-alias-label-quaternary`,
 `--dsw-alias-state-business-primary`, `--dsw-alias-state-error-primary`,
 `--dsw-alias-state-idle-primary`, `--dsw-alias-state-success-primary`,
 `--dsw-alias-state-warn-primary`, `--dsw-focus-ring-color`.

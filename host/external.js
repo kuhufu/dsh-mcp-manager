@@ -309,7 +309,9 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
       const application = applicationOf(change);
       if (application === 'overridden') {
         if (!await repairEntry(entryId, payload.enabled)) throw overriddenFailure(entryId, payload.enabled);
-        await waitForEntryState(entryId, payload.enabled, 3000);
+        if (!await waitForEntryState(entryId, payload.enabled, 3000)) {
+          throw new ManagerError('internal', `repaired the profile patch for "${entryId}", but the Loader did not apply the new state; restart the app to pick it up`);
+        }
         return { servers: list(), repaired: true };
       }
       if (application !== 'applied') {
@@ -342,10 +344,13 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
         throw new ManagerError('invalid', 'request body must include a non-empty "entryId"', 'entryId');
       }
       const source = requireMcpEntry(entryId);
+      const wasEnabled = source.disabled !== true;
       const config = source.options.config !== null && typeof source.options.config === 'object' ? source.options.config : {};
       const input = {
         name: typeof config.serverName === 'string' ? config.serverName : `${entryId}`,
-        enabled: true,
+        // Migration keeps the source's enablement. A disabled source stays a
+        // disabled managed record; enabling it is an explicit second action.
+        enabled: wasEnabled,
         transport: config.transport === 'streamable-http' ? 'http' : 'stdio',
         command: config.command,
         args: config.args,
@@ -364,7 +369,6 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
       const validated = validateServerInput(input, { servers: current, id: existing === undefined ? undefined : existing.id });
       const record = buildServerRecord(validated, existing === undefined ? {} : { existing });
       const manager = requirePluginManager();
-      const wasEnabled = source.disabled !== true;
       if (wasEnabled) {
         const change = await manager.setPluginEnabled(entryId, false);
         const application = applicationOf(change);
@@ -372,7 +376,10 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
           // Already off; nothing to undo.
         } else if (application === 'overridden') {
           if (!await repairEntry(entryId, false)) throw overriddenFailure(entryId, false);
-          await waitForEntryState(entryId, false, 3000);
+          if (!await waitForEntryState(entryId, false, 3000)) {
+            try { await manager.setPluginEnabled(entryId, true); } catch { /* best effort */ }
+            throw new ManagerError('internal', `repaired the profile patch for "${entryId}", but the Loader did not disable it; restart the app and retry`);
+          }
         } else if (application !== 'applied') {
           try {
             await manager.setPluginEnabled(entryId, true);

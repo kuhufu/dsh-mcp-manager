@@ -97,5 +97,9 @@ export function apply(ctx, config = {}) {
     }
     return () => Promise.allSettled(registered.map((pending) => pending.then((dispose) => dispose())));
   }, 'mcp-manager.routes');
-  void manager.boot();
+  void manager.boot().catch((error) => {
+    const message = `mcp-manager: boot failed: ${error instanceof Error ? error.message : String(error)}`;
+    if (typeof ctx.logger?.error === 'function') ctx.logger.error(message);
+    else if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message);
+  });
 }

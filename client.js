@@ -505,7 +505,7 @@ window.__ModuleLoader__.load({
     function phaseOf(server) {
       if (!server.enabled) return 'disabled';
       if (server.status === 'ready') return 'ready';
-      if (server.status === 'connecting') return 'connecting';
+      if (server.status === 'connecting' || server.status === 'starting') return 'connecting';
       if (server.status === 'error') return 'error';
       return 'stopped';
     }
@@ -1906,7 +1906,8 @@ window.__ModuleLoader__.load({
      * @returns whether a poll could observe a change.
      */
     function isSettling(server) {
-      return server.status === 'connecting' || server.status === 'starting';
+      return server.status === 'connecting' || server.status === 'starting'
+        || (server.status === 'error' && typeof server.nextRetryAt === 'number');
     }
 
     /** Publish one committed snapshot to every mounted surface. */
@@ -2107,16 +2108,18 @@ window.__ModuleLoader__.load({
           className: 'dshmcp-file',
           'data-dragging': dragging ? 'true' : undefined,
           onDragOver: (event) => {
-            if (props.disabled || !event.dataTransfer) return;
+            if (!event.dataTransfer) return;
             event.preventDefault();
+            if (props.disabled) return;
             setDragging(true);
           },
           onDragLeave: () => setDragging(false),
           onDrop: (event) => {
-            if (props.disabled) return;
+            if (!event.dataTransfer) return;
             event.preventDefault();
             setDragging(false);
-            choose(event.dataTransfer?.files?.[0]);
+            if (props.disabled) return;
+            choose(event.dataTransfer.files?.[0]);
           },
         },
         h(
@@ -2179,7 +2182,7 @@ window.__ModuleLoader__.load({
           key: 'file',
           t,
           accept: '.json,.jsonc,application/json',
-          disabled: busy,
+          disabled: busy || readOnly,
           onFile: (file) => void run(async () => {
             if (file.size > 2 * 1024 * 1024) throw new ApiError('invalid', t('fileTooLarge'));
             setText(await file.text());
@@ -2743,7 +2746,7 @@ window.__ModuleLoader__.load({
 .dshmcp-session-page .dshmcp-session-subtitle{font-size:13px;line-height:20px;margin-top:4px}
 .dshmcp-session-page .dshmcp-session-section{border-top:0;padding-top:24px;margin-top:0;gap:6px}
 .dshmcp-session-page .dshmcp-session-badge{border:0;padding:0;color:var(--dsw-alias-label-tertiary)}
-.dshmcp-session-page .dshmcp-session-page .dshmcp-session-foot{padding-top:12px}
+.dshmcp-session-page .dshmcp-session-foot{padding-top:12px}
 `;
 
     /**
@@ -2763,6 +2766,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(null);
       const requestGeneration = React.useRef(0);
       const pendingMutation = React.useRef(null);
+      const pollInFlight = React.useRef(false);
       const alive = React.useRef(true);
       // Slots may hand a fresh `t` each render; keeping it in a ref stops that
       // from re-running the fetch effect (a request per parent render).
@@ -2796,6 +2800,28 @@ window.__ModuleLoader__.load({
       }, [active, sessionId]);
 
       const state = snapshot !== null && snapshot.sessionId === sessionId ? snapshot : null;
+      const settling = state !== null && Array.isArray(state.servers)
+        && state.servers.some((server) => server.status === 'connecting' || server.status === 'starting'
+          || (server.status === 'error' && typeof server.nextRetryAt === 'number'));
+      React.useEffect(() => {
+        if (!active || typeof sessionId !== 'string' || !settling) return undefined;
+        const timer = setInterval(() => {
+          if (pollInFlight.current || pendingMutation.current !== null) return;
+          pollInFlight.current = true;
+          const request = ++requestGeneration.current;
+          post(ROUTES.session, { sessionId })
+            .then((payload) => {
+              if (alive.current && requestGeneration.current === request) setSnapshot(payload);
+            })
+            .catch((error) => {
+              if (alive.current && requestGeneration.current === request) setFailure(explain(error, translate.current));
+            })
+            .finally(() => {
+              pollInFlight.current = false;
+            });
+        }, POLL_MS);
+        return () => clearInterval(timer);
+      }, [active, sessionId, settling]);
       const mutate = (key, body) => {
         if (pendingMutation.current !== null || state === null || !active) return;
         const request = ++requestGeneration.current;

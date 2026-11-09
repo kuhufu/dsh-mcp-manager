@@ -37,11 +37,13 @@ export const SESSION_STORAGE_RELATIVE_PATH = path.join('storages', 'mcp-manager-
  * @returns {{ overrides: Record<string, boolean>, updatedAt: number }|undefined} normalized entry.
  */
 function coerceEntry(value) {
-  if (!isRecord(value) || !isRecord(value.overrides)) return undefined;
+  if (!isRecord(value)) return undefined;
   /** @type {Record<string, boolean>} */
   const overrides = {};
-  for (const [serverId, enabled] of Object.entries(value.overrides)) {
-    if (serverId !== '' && typeof enabled === 'boolean') overrides[serverId] = enabled;
+  if (isRecord(value.overrides)) {
+    for (const [serverId, enabled] of Object.entries(value.overrides)) {
+      if (serverId !== '' && typeof enabled === 'boolean') overrides[serverId] = enabled;
+    }
   }
   /** @type {Record<string, boolean>} */
   const external = {};

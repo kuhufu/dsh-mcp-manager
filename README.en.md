@@ -34,8 +34,8 @@ tools appear in the agent as native `mcp__<server>__<tool>` tools — no hand-ed
   same switch.
 - **Coexists with existing `dsh-mcp-client` entries.** Foreign rows show their entry id, transport
   and live tool count, and can be enabled or disabled in place. **Migrate here** disables the
-  source first and waits for its tools to be released before copying the config and connecting, so
-  two connections never compete for the same tool names.
+  source first and waits for its tools to be released before copying the config; a source that was
+  disabled stays disabled, and two connections never compete for the same tool names.
 - **Direct MCP JSON import.** The toolbar's *Import MCP JSON* button (also in the empty state)
   accepts the `mcpServers` object from Claude Desktop, Claude Code or Cursor, a VS Code `servers`
   object or a bare map — JSONC comments and trailing commas included. It detects the transport,
@@ -165,9 +165,9 @@ Servers already configured as separate `@deepseek-ai/dsh-mcp-client` rows appear
 
 - **Enable/disable** writes the profile's enablement state without touching the row's config.
 - **Migrate here** disables the source row, waits for its tools and child process to be released,
-  then copies the config into a managed record and connects. If a managed record with the same name
-  exists, it is replaced in place with its id kept — this also repairs a row stuck in the collision
-  error.
+  then copies the config into a managed record. The source's enablement is preserved: a disabled
+  source stays a disabled record. If a managed record with the same name exists, it is replaced in
+  place with its id kept — this also repairs a row stuck in the collision error.
 - Migration copies environment variables and headers as plain text; `!!js process.env.X` becomes
   the resolved value.
 
@@ -176,14 +176,15 @@ Servers already configured as separate `@deepseek-ai/dsh-mcp-client` rows appear
 The toolbar's **Import MCP JSON** button (the empty state offers one too) opens a dedicated dialog:
 
 - Paste a Claude Desktop, Claude Code or Cursor `{ "mcpServers": … }`, a VS Code
-  `{ "servers": … }` (sibling `inputs` is ignored), one server object, or a bare map — or load the
-  file directly.
+  `{ "servers": … }` (sibling `inputs` is ignored), a top-level server array, one server object,
+  or a bare map — or load the file directly.
 - JSONC comments and trailing commas are accepted, so an annotated `mcp.json` can be pasted as-is.
 - The transport is detected (stdio or HTTP) and names are normalized: spaces, dots and similar
   invalid characters become dashes, and a collision appends `-2`, `-3`. The dialog previews the
   recognized servers, then lists renames, skips and notes after import.
 - *Enable and connect immediately* is on by default; uncheck it to store the servers disabled. An
-  entry marked `"disabled": true` in the source stays disabled.
+  entry marked `"disabled": true` or `"enabled": false` in the source stays disabled, and
+  `autoInject: false` entries do not start a connection automatically.
 - Entries using the legacy SSE transport are skipped with a reason instead of being stored as
   servers that can never connect.
 
@@ -240,7 +241,7 @@ Host modules:
 | `host/session-state.js` | Persisted per-session overrides |
 | `host/external.js` / `external-defaults.js` | `dsh-mcp-client` enablement, migration and default injection |
 | `host/profile-patch.js` / `patch-repair.js` | Duplicate-declaration repair in profile/home patches |
-| `host/mcp.js` | Dependency-free MCP client (stdio + Streamable HTTP) and tool bridge |
+| `host/mcp.js` / `mcp-json.js` | Dependency-free MCP client and third-party config normalizer |
 | `host/store.js` | Validation, atomic persistence and recovery |
 | `host/routes.js` | Fetch routes and response shaping |
 
@@ -276,8 +277,8 @@ npm run test:regression # only the node:test regression and client tests
 npm run test:browser    # after preparing the environment in test/BROWSER.md
 ```
 
-- Smoke suites: `mcp` 29 checks, `external` 93, `takeover-race` 8, `patch-repair` 23.
-- Node: 35 `regression` + 21 `client` tests, 56 in total, covering dual-entry sync, stale poll
+- Smoke suites: `mcp` 29 checks, `external` 97, `takeover-race` 8, `patch-repair` 27.
+- Node: 39 `regression` + 21 `client` tests, 60 in total, covering dual-entry sync, stale poll
   responses, cancellation, failed writes, recovery, dynamic tools, page races and direct-import
   normalization.
 - The browser suite runs a real React 18 page against real Host routes and a local fake MCP server.

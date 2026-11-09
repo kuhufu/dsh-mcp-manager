@@ -9,34 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Direct MCP JSON import: paste or load a Claude Desktop / Claude Code / Cursor `mcpServers`
-  document, a VS Code `servers` object or a bare map (JSONC comments and trailing commas included).
-  Names are normalized and de-duplicated, the transport is detected, legacy-SSE entries are skipped
-  with a reason, and imported servers connect immediately unless the import is switched to disabled.
+  document, a VS Code `servers` object, a top-level server array or a bare map (JSONC comments
+  and trailing commas included). Names are normalized and de-duplicated, the transport is
+  detected, legacy-SSE entries are skipped with a reason, and imported servers connect
+  immediately unless the import is switched to disabled.
 - Repair cross-layer duplicate patch declarations at boot, so an entry inserted by the
   home patch and overridden by the profile patch becomes toggleable again.
-- Per-Session MCP visibility: the `/mcp` panel, an "MCP" View tab beside Chat and
-  Trajectory, and `autoInject` defaults for tool-heavy servers.
-
-### Fixed
-
-- Keep patch repair from ever leaving `cordis.patch.yml` without a top-level YAML array:
-  block-style `insert` items are handled, both files are validated before writing, and a
-  failed backup now aborts the rewrite.
-- Commit in-memory configuration only after successful persistence; retain a previous-good
-  backup and protect corrupt/future-version files until explicit, archived recovery.
-- Use the initialize result for HTTP protocol negotiation; abort canceled/timed-out HTTP
-  requests, distinguish server requests from responses, and clean up failed sessions.
-- Serialize frontend mutations across both surfaces, reject stale polls, abort reads on
-  unmount, and preserve environment-value whitespace when editing.
-
-- Preserve valid records when individual stored rows are invalid, archiving the original before
-  the next write; validate raw tool names and omit secret fields entirely from default exports.
-- Keep saving dialogs dismissible, protect newer editors from older save completions, show
-  accurate external-only filter results, and retain the sidebar preference as the final row.
-
-### Added
-
-- `/mcp` per-session switches: a composer panel plus `list`/`on`/`off`/`reset` command forms.
+- Per-Session MCP visibility: the `/mcp` composer panel and `list`/`on`/`off`/`reset` commands,
+  an "MCP" View tab beside Chat and Trajectory, and `autoInject` defaults for tool-heavy servers.
   Tools are registered on `agent.ctx`, so one Session can hide a server without changing the
   saved configuration or any other Session; overrides persist in
   `storages/mcp-manager-sessions.json`.
@@ -47,6 +27,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Host/runtime/migration module separation, a shared client data hook, regression tests,
   a separate `npm run test:browser` command with a CI browser job, and unified
   `npm test` / `npm run check` commands.
+
+### Fixed
+
+- Keep patch repair from ever leaving `cordis.patch.yml` without a top-level YAML array:
+  block-style `insert` items are handled, both files are validated before writing, and a
+  failed backup now aborts the rewrite.
+- Preserve profile header comments and write `[]` instead of an empty file when the last
+  declaration is removed; a nested insert entry is never mistaken for a bare override, and
+  two inserts for one id are refused instead of merged into a duplicate.
+- Reset the automatic retry budget after a successful connection, poll scheduled retries,
+  and poll the `/mcp` panel and View while a server is still settling.
+- Respect `enabled: false` in imported documents, accept a top-level servers array, count
+  only entries that actually start, and reject request bodies over 2 MB.
+- Serialize `/mcp on|off` with other mutations and resolve the profile patch through
+  `profileContext` instead of guessing `desktop`; preserve a disabled source row's state when
+  migrating it, and report a patch repair the Loader did not apply instead of claiming success.
+- Commit in-memory configuration only after successful persistence; retain a previous-good
+  backup and protect corrupt/future-version files until explicit, archived recovery.
+- Use the initialize result for HTTP protocol negotiation; abort canceled/timed-out HTTP
+  requests, distinguish server requests from responses, and clean up failed sessions.
+- Serialize frontend mutations across both surfaces, reject stale polls, abort reads on
+  unmount, and preserve environment-value whitespace when editing.
+- Preserve valid records when individual stored rows are invalid, archiving the original before
+  the next write; validate raw tool names and omit secret fields entirely from default exports.
+- Keep saving dialogs dismissible, protect newer editors from older save completions, show
+  accurate external-only filter results, and retain the sidebar preference as the final row.
 
 ## [0.1.0] - 2026-11-02
 

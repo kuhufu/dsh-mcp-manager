@@ -283,6 +283,11 @@ list = await ok(LIST_PATH, {});
 assert.equal(list.servers.length, 1);
 assert.equal(list.external.length, 2);
 
+// Migrating a disabled source preserves that state instead of silently enabling it.
+const disabledTakeover = await ok(TAKEOVER_PATH, { entryId: disabledRow.id });
+const migratedDisabled = disabledTakeover.servers.find((server) => server.name === 'web');
+assert.equal(migratedDisabled.enabled, false, 'a disabled source stays disabled after migration');
+
 // The page preference is a plain persisted boolean; takeover never touches it.
 const uiOff = await ok(UI_PATH, { railEntry: false });
 assert.deepEqual(uiOff.ui, { railEntry: false });

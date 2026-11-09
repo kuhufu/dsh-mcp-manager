@@ -27,7 +27,7 @@ Harness。
 - **默认注入。** 关闭某台服务器的「默认注入到每个会话」后，它默认不连接，直到某个会话在
   `/mcp` 里按需开启。适合工具很多的服务器；`dsh-mcp-client` 条目有同名开关。
 - **兼容已有 `dsh-mcp-client` 条目。** 外部条目会列出入口 id、传输方式和实时工具数，可以直接
-  启用/停用；「迁到此页」会先停用原条目、等待工具释放，再复制配置并连接，避免两条连接抢同名工具。
+  启用/停用；「迁到此页」会先停用原条目、等待工具释放，再复制配置；源条目原本停用时，新记录也保持停用，且两条连接不会抢同名工具。
 - **一键导入其他客户端的 MCP JSON。** 工具栏的「导入 MCP JSON」（空状态里也有）接受 Claude
   Desktop、Claude Code、Cursor 的 `mcpServers`，VS Code 的 `servers` 对象或裸映射，支持 JSONC
   注释；自动识别传输、修正名称，默认导入后立即启用并连接。
@@ -147,7 +147,7 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 已经在 `@deepseek-ai/dsh-mcp-client` 条目里配置的服务器会以只读行出现在本页：
 
 - **启用/停用**：直接写 profile 的启用状态，不修改条目配置。
-- **迁到此页**：先停用源条目并等待其工具和子进程释放，再把配置复制成本页记录并连接。
+- **迁到此页**：先停用源条目并等待其工具和子进程释放，再复制配置；源条目原本停用时，新记录也保持停用。
   如果本页已有同名记录，会原地替换并保留 id，也可以用来修复卡在冲突报错里的记录。
 - 迁移会带来明文的环境变量和请求头；`!!js process.env.X` 会变成求值后的真实值。
 
@@ -156,12 +156,13 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 工具栏的「导入 MCP JSON」按钮（空状态里也有一个）打开直达导入弹窗：
 
 - 粘贴 Claude Desktop / Claude Code / Cursor 的 `{ "mcpServers": … }`、VS Code 的
-  `{ "servers": … }`（同级的 `inputs` 会忽略）、单个服务器对象或裸映射都可以，也可以直接读取文件。
+  `{ "servers": … }`（同级的 `inputs` 会忽略）、顶层服务器数组、单个服务器对象或裸映射都可以，
+  也可以直接读取文件。
 - 支持 JSONC 注释和尾随逗号：带注释的 `mcp.json` 可以原样粘贴。
 - 自动识别 stdio / HTTP 传输，把名称里的空格、点号等非法字符规范成短横线；与已有记录重名时
   追加 `-2`、`-3`。弹窗先预览识别到的服务器，导入后列出重命名、跳过和提示。
-- 默认「导入后立即启用并连接」；取消勾选则保存为停用。源配置里标了 `"disabled": true` 的条目
-  保持停用。
+- 默认「导入后立即启用并连接」；取消勾选则保存为停用。源配置里标了 `"disabled": true` 或
+  `"enabled": false` 的条目保持停用；`autoInject: false` 的条目不自动连接。
 - 不支持旧版 SSE 传输的条目会被跳过并说明原因，不会存成连不上的服务器。
 
 ### 导入、导出与复制
@@ -209,7 +210,7 @@ Host 侧模块：
 | `host/session-state.js` | 持久化会话级覆盖项 |
 | `host/external.js` / `external-defaults.js` | `dsh-mcp-client` 条目的启停、迁移和默认注入 |
 | `host/profile-patch.js` / `patch-repair.js` | profile patch 的重复声明修复与跨层修复 |
-| `host/mcp.js` | 零依赖 MCP 客户端（stdio + Streamable HTTP）与工具桥接 |
+| `host/mcp.js` / `mcp-json.js` | 零依赖 MCP 客户端与第三方配置归一化 |
 | `host/store.js` | 校验、原子持久化与恢复 |
 | `host/routes.js` | Fetch 路由与响应整形 |
 
@@ -245,8 +246,8 @@ npm run test:regression # 只跑 node:test 回归与前端状态
 npm run test:browser    # 按 test/BROWSER.md 准备环境后运行
 ```
 
-- smoke：`mcp` 29 项、`external` 93 项、`takeover-race` 8 项、`patch-repair` 23 项。
-- Node：35 项 `regression` + 21 项 `client` 测试，共 56 项，覆盖双入口同步、轮询乱序、取消、
+- smoke：`mcp` 29 项、`external` 97 项、`takeover-race` 8 项、`patch-repair` 27 项。
+- Node：39 项 `regression` + 21 项 `client` 测试，共 60 项，覆盖双入口同步、轮询乱序、取消、
   持久化失败、恢复、动态工具、页面竞态和直接导入的归一化。
 - 浏览器套件通过真实 React 18 页面、真实 Host 路由和本地假 MCP 服务运行，覆盖创建/编辑/复制/
   删除、连接选项、工具开关、导入导出、直接导入 MCP JSON、搜索筛选、侧栏偏好、弹窗焦点和

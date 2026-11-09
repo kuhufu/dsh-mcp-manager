@@ -110,6 +110,9 @@ export function serverView(server, state) {
 }
 
 
+/** Refuse oversized request bodies before they are parsed into memory. */
+const MAX_BODY_LENGTH = 2 * 1024 * 1024;
+
 /** Failure raised for a request body that is not a JSON object. */
 class BodyError extends Error {
   constructor(message) {
@@ -246,7 +249,11 @@ function route(manager, path, handle, logger) {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      await manager.ready();
+      try {
+        await manager.ready();
+      } catch (error) {
+        return jsonResponse(200, { ok: false, error: toFailure(error, logger, path) });
+      }
       let body;
       try {
         body = await readJsonObject(request);
@@ -277,6 +284,10 @@ function route(manager, path, handle, logger) {
  * @throws {BodyError} when the body is not a JSON object.
  */
 async function readJsonObject(request) {
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_BODY_LENGTH) {
+    throw new BodyError('request body is too large');
+  }
   let text;
   try {
     text = await request.text();
@@ -284,6 +295,7 @@ async function readJsonObject(request) {
     throw new BodyError('request body could not be read');
   }
   if (typeof text !== 'string' || text.trim() === '') return {};
+  if (text.length > MAX_BODY_LENGTH) throw new BodyError('request body is too large');
   let parsed;
   try {
     parsed = JSON.parse(text);

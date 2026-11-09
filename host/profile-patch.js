@@ -36,12 +36,17 @@ const INSERT_KEY = /^(?:-\s+|\s+)insert:\s*(?:#.*)?$/;
 /**
  * Split a patch document into its top-level sequence entries.
  *
+ * Lines before the first entry are returned separately so a repair can put the
+ * header comments back; entries themselves keep every line up to the next
+ * top-level item.
+ *
  * @param {string} text - patch file text.
- * @returns {{ text: string, id?: string, insert: boolean, keys: string[] }[]} entries, in order.
+ * @returns {{ header: string[], entries: { text: string, id?: string, ids: string[], insert: boolean, keys: string[] }[] }} header lines and entries, in order.
  */
 function splitEntries(text) {
   const lines = text.split('\n');
   const entries = [];
+  const header = [];
   let current = null;
   for (const line of lines) {
     if (ENTRY_START.test(line)) {
@@ -56,7 +61,10 @@ function splitEntries(text) {
       }
       continue;
     }
-    if (current === null) continue;
+    if (current === null) {
+      header.push(line);
+      continue;
+    }
     current.lines.push(line);
     if (INSERT_KEY.test(line)) current.insert = true;
     const nested = NESTED_ID_KEY.exec(line);
@@ -74,7 +82,21 @@ function splitEntries(text) {
     if (key !== null && key[1] !== 'insert') current.keys.push(key[1]);
   }
   if (current !== null) entries.push(current);
-  return entries;
+  return { header, entries };
+}
+
+/**
+ * Whether a patch document still starts with a top-level YAML array.
+ * @param {string} text - patch file text.
+ * @returns {boolean} true when the first meaningful line is `-` or `[`.
+ */
+function startsTopLevelArray(text) {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#') || trimmed === '---') continue;
+    return trimmed.startsWith('-') || trimmed.startsWith('[');
+  }
+  return false;
 }
 
 /** Whether one entry only states an id and its enabled state. */
@@ -115,7 +137,7 @@ export async function repairDuplicateRow(patchPath, entryId, enabled) {
     return { repaired: false, reason: error?.code === 'ENOENT' ? 'no patch file' : String(error?.message ?? error) };
   }
 
-  const entries = splitEntries(text);
+  const { header, entries } = splitEntries(text);
   const matches = entries.filter((entry) => entry.ids.includes(entryId));
   if (matches.length < 2) return { repaired: false, reason: 'the row is not declared twice' };
   const stale = matches.filter(isBareOverride);
@@ -131,8 +153,15 @@ export async function repairDuplicateRow(patchPath, entryId, enabled) {
     .filter((block) => block.trim() !== '')
     .join('\n');
   const appended = enabled ? '' : `- id: ${JSON.stringify(entryId)}\n  disabled: true\n`;
-  const next = `${body}${body.endsWith('\n') || body === '' ? '' : '\n'}${appended}`;
+  const leading = header.join('\n').replace(/\n+$/, '');
+  const blocks = [];
+  if (leading.trim() !== '') blocks.push(leading);
+  if (body.trim() !== '') blocks.push(body);
+  if (appended !== '') blocks.push(appended);
+  else if (body.trim() === '') blocks.push('[]');
+  const next = `${blocks.join('\n').replace(/\n+$/, '')}\n`;
 
+  if (!startsTopLevelArray(next)) return { repaired: false, reason: 'repair would not start with a top-level array' };
   if (next === text) return { repaired: false, reason: 'nothing to change' };
 
   const backup = `${patchPath}.bak-${new Date().toISOString().replace(/[^0-9]/g, '')}`;

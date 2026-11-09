@@ -67,20 +67,21 @@ export function uniqueServerName(base, taken) {
  * Read the raw server entries a document declares.
  *
  * Shapes are tried in order of specificity: Claude/Cursor `mcpServers`, a VS
- * Code `servers` object or this plugin's `servers` array, a single server
- * object, then a bare `{ name: config }` map.
+ * Code `servers` object or this plugin's `servers` array, a top-level server
+ * array, a single server object, then a bare `{ name: config }` map.
  *
  * @param {unknown} document - parsed JSON document.
  * @returns {{ name: unknown, config: unknown }[]} candidates in document order.
  * @throws {ManagerError} `invalid` when the document declares no servers or too many.
  */
 export function readMcpJsonEntries(document) {
-  if (!isRecord(document)) {
-    throw new ManagerError('invalid', 'document must be a JSON object', 'document');
-  }
   /** @type {{ name: unknown, config: unknown }[]} */
   let candidates = [];
-  if (isRecord(document.mcpServers)) {
+  if (Array.isArray(document)) {
+    candidates = document.map((entry) => ({ name: isRecord(entry) ? entry.name : undefined, config: entry }));
+  } else if (!isRecord(document)) {
+    throw new ManagerError('invalid', 'document must be a JSON object or servers array', 'document');
+  } else if (isRecord(document.mcpServers) && Object.keys(document.mcpServers).length > 0) {
     candidates = mapEntries(document.mcpServers);
   } else if (Array.isArray(document.servers)) {
     candidates = document.servers.map((entry) => ({ name: isRecord(entry) ? entry.name : undefined, config: entry }));
@@ -94,7 +95,7 @@ export function readMcpJsonEntries(document) {
   if (candidates.length === 0) {
     throw new ManagerError(
       'invalid',
-      'no MCP servers found in this document: expected "mcpServers", a "servers" object or array, one server object, or a { name: config } map',
+      'no MCP servers found in this document: expected "mcpServers", a "servers" object or array, a top-level server array, one server object, or a { name: config } map',
       'document',
     );
   }
@@ -137,7 +138,7 @@ export function normalizeMcpJsonDocument(document, options = {}) {
   return {
     entries,
     warnings,
-    enabled: entries.filter((entry) => entry.enabled === true).length,
+    enabled: entries.filter((entry) => entry.enabled === true && entry.autoInject !== false).length,
   };
 }
 
@@ -182,12 +183,13 @@ function normalizeEntry(candidate, context) {
   /** Reasons that matter once the entry is known to be importable. */
   const notes = [];
   if (declared.unknown === true) notes.push('unknown-transport');
-  if (config.disabled === true) notes.push('source-disabled');
+  const sourceDisabled = config.disabled === true || config.enabled === false;
+  if (sourceDisabled) notes.push('source-disabled');
   if (typeof config.envFile === 'string' && config.envFile.trim() !== '') notes.push('env-file-ignored');
   if (mentionsInputPlaceholder(config)) notes.push('input-placeholder');
 
   /** @type {Record<string, unknown>} */
-  const input = { transport, enabled: enable && config.disabled !== true };
+  const input = { transport, enabled: enable && !sourceDisabled };
   if (transport === 'stdio') {
     if (command === undefined || command === '') {
       warnings.push({ kind: 'skipped', name: displayName, reason: 'missing-command' });

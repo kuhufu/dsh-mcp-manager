@@ -167,13 +167,66 @@ export function declaredIds(text) {
 }
 
 /**
+ * Entry ids declared by insert items in a profile patch, in either style.
+ * @param {string} text - profile patch contents.
+ * @returns {Set<string>} ids already inserted by the profile.
+ */
+function profileInsertIds(text) {
+  const ids = new Set();
+  const lines = lineSpans(text);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/^-\s+insert\s*:/.test(line.text)) continue;
+    if (/^-\s+insert\s*:\s*\[/.test(line.text)) {
+      const open = text.indexOf('[', line.start);
+      const close = matchBracket(text, open, '[', ']');
+      if (close < 0) continue;
+      const entries = flowEntries(text.slice(open + 1, close));
+      if (entries !== undefined) for (const entry of entries) ids.add(entry.id);
+      continue;
+    }
+    for (let next = index + 1; next < lines.length && !/^-\s/.test(lines[next].text); next += 1) {
+      const match = /^\s+-\s+id\s*:\s*["']?([A-Za-z0-9._:-]+)["']?\s*(?:#.*)?$/.exec(lines[next].text);
+      if (match !== null) ids.add(match[1]);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Whether one patch still looks like a top-level array with indented insert
+ * bodies. Catches the corruption a text splice can cause even when the first
+ * line still starts with `-`.
+ * @param {string} text - patch contents.
+ * @returns {boolean} true when the shape is safe to write.
+ */
+function validPatchText(text) {
+  if (patchShape(text) === 'invalid') return false;
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^-\s+insert\s*:\s*(?:#.*)?$/.test(lines[index])) continue;
+    let next = index + 1;
+    while (next < lines.length) {
+      const trimmed = lines[next].trim();
+      if (trimmed === '' || trimmed.startsWith('#')) {
+        next += 1;
+        continue;
+      }
+      break;
+    }
+    if (next < lines.length && !/^\s/.test(lines[next]) && !/^-\s/.test(lines[next])) return false;
+  }
+  return true;
+}
+
+/**
  * Last standalone `disabled` value the profile declares for one id.
  * @param {string} text - profile patch contents.
  * @param {string} id - entry id.
  * @returns {boolean | undefined} the last declared value.
  */
 function lastDisabledOverride(text, id) {
-  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*$\\n\\s+disabled\\s*:\\s*(true|false)\\s*$`, 'gm');
+  const pattern = new RegExp(`^-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*$\\n\\s+disabled\\s*:\\s*(true|false)\\s*$`, 'gm');
   let last;
   for (const match of text.matchAll(pattern)) last = match[1] === 'true';
   return last;
@@ -186,7 +239,7 @@ function lastDisabledOverride(text, id) {
  * @returns {string} contents without that block.
  */
 function stripDisabledOverride(text, id) {
-  const pattern = new RegExp(`^\\s*-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*\\n\\s+disabled\\s*:\\s*(?:true|false)\\s*\\n?`, 'gm');
+  const pattern = new RegExp(`^-\\s+id\\s*:\\s*["']?${escapeRegExp(id)}["']?\\s*\\n\\s+disabled\\s*:\\s*(?:true|false)\\s*\\n?`, 'gm');
   return text.replace(pattern, '');
 }
 
@@ -222,12 +275,21 @@ export async function repairPatchLayers({ homePatch, profilePatch, stamp = Strin
   const profileIds = declaredIds(profileText);
   const moving = insert.entries.filter((entry) => profileIds.has(entry.id));
   if (moving.length === 0) return { moved: [], problems, backups };
+  const alreadyInserted = profileInsertIds(profileText);
+  const conflicting = moving.filter((entry) => alreadyInserted.has(entry.id));
+  if (conflicting.length > 0) {
+    return {
+      moved: [],
+      problems: [`${profilePatch} already inserts ${conflicting.map((entry) => entry.id).join(', ')}; refusing to duplicate the declaration`],
+      backups,
+    };
+  }
   const movingIds = new Set(moving.map((entry) => entry.id));
 
   const nextHome = insert.block === true
     ? removeBlockEntries(homeText, insert, movingIds)
     : removeFlowEntries(homeText, insert, movingIds);
-  if (patchShape(nextHome) === 'invalid') {
+  if (!validPatchText(nextHome)) {
     return { moved: [], problems: [`${homePatch} would no longer be a top-level YAML array`], backups };
   }
 
@@ -235,7 +297,7 @@ export async function repairPatchLayers({ homePatch, profilePatch, stamp = Strin
   if (nextProfile === undefined) {
     return { moved: [], problems: [`${profilePatch} is not a block-style patch; refusing to append`], backups };
   }
-  if (patchShape(nextProfile) === 'invalid') {
+  if (!validPatchText(nextProfile)) {
     return { moved: [], problems: [`${profilePatch} would no longer be a top-level YAML array`], backups };
   }
 
@@ -296,7 +358,10 @@ function appendToProfile(profileText, moving) {
   const shape = patchShape(base);
   if (shape === 'flow') {
     if (!isEmptyArray(base)) return undefined; // appending a block item to a flow array is invalid
-    base = '';
+    // Keep any comment header that precedes the empty array.
+    const lines = base.split('\n');
+    const at = lines.findIndex((line) => /^\[\s*\]$/.test(line.trim()));
+    base = at < 0 ? '' : lines.slice(0, at).join('\n').replace(/\n+$/, '');
   } else if (shape === 'invalid' && base.trim() !== '') {
     return undefined;
   }

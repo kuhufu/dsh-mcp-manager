@@ -43,6 +43,7 @@ assert.equal(typeof disabled.backup, 'string');
 assert.ok((await readdir(home)).some((name) => name.startsWith('cordis.patch.yml.bak-')), 'a backup is written');
 
 let text = await readFile(patchPath, 'utf8');
+assert.ok(text.startsWith('# profile patch\n'), 'header comments survive a repair');
 const githubBlocks = text.split(/^-(?=\s)/m).filter((block) => block.includes('magpie-mcp-GitHub'));
 assert.equal(githubBlocks.filter((block) => !block.includes('insert:')).length, 1, 'one override remains');
 assert.match(text, /- id: "magpie-mcp-GitHub"\n {2}disabled: true\n$/, 'the final declaration disables the row at the end');
@@ -91,5 +92,14 @@ assert.match(await readFile(patchPath, 'utf8'), /- id: "magpie-mcp-github"\n {2}
 // A missing file is a refusal, not a crash.
 assert.equal((await repairDuplicateRow(path.join(home, 'absent.yml'), 'x', true)).repaired, false);
 
+// Two bare overrides with no insert, enabled: keep the file a valid empty array.
+const onlyOverrides = `# header\n- id: only\n  disabled: true\n- id: only\n  disabled: false\n`;
+await writeFile(patchPath, onlyOverrides);
+const emptied = await repairDuplicateRow(patchPath, 'only', true);
+assert.equal(emptied.repaired, true);
+const emptiedText = await readFile(patchPath, 'utf8');
+assert.ok(emptiedText.startsWith('# header\n'), 'the header is kept when the last entry is removed');
+assert.match(emptiedText, /^\[\]$/m, 'the result is still a top-level array');
+
 await rm(home, { recursive: true, force: true });
-console.log('patch repair smoke: 23 checks passed, 0 failed');
+console.log('patch repair smoke: 27 checks passed, 0 failed');

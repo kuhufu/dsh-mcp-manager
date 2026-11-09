@@ -285,6 +285,10 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.instructions = connection.instructions;
     state.connectedAt = Date.now();
     state.fingerprint = fingerprintOf(server);
+    // A successful generation starts with a fresh retry budget; otherwise a
+    // later drop would inherit the attempts spent before this connection.
+    state.retryAttempt = 0;
+    state.nextRetryAt = undefined;
     state.status = 'ready';
     log(state, 'info', `Connected: ${state.toolCount} tools, protocol ${connection.protocolVersion}`);
     if (typeof logger?.info === 'function') logger.info(`mcp-manager: "${server.name}" connected with ${state.toolCount} tool(s)`);

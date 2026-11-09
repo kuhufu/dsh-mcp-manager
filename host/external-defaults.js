@@ -13,6 +13,9 @@ import path from 'node:path';
 
 import { isRecord, resolveDshHome } from './store.js';
 
+/** Persisted document version. */
+export const EXTERNAL_DEFAULTS_VERSION = 1;
+
 /** Relative path of the document below `DSH_HOME`. */
 export const EXTERNAL_DEFAULTS_RELATIVE_PATH = path.join('storages', 'mcp-manager-external.json');
 
@@ -37,6 +40,10 @@ export function createExternalDefaults(options = {}) {
   async function readDocument() {
     try {
       const document = JSON.parse(await readFile(file, 'utf8'));
+      if (isRecord(document) && document.version !== undefined && document.version !== EXTERNAL_DEFAULTS_VERSION) {
+        warn(`ignoring ${file}: unsupported document version ${String(document.version)}`);
+        return;
+      }
       if (isRecord(document) && isRecord(document.entries)) {
         for (const [entryId, autoInject] of Object.entries(document.entries)) {
           if (entryId !== '' && typeof autoInject === 'boolean') entries[entryId] = autoInject;
@@ -59,7 +66,7 @@ export function createExternalDefaults(options = {}) {
     try {
       const handle = await open(temporary, 'wx', 0o600);
       try {
-        await handle.writeFile(`${JSON.stringify({ version: 1, entries: candidate }, null, 2)}\n`, 'utf8');
+        await handle.writeFile(`${JSON.stringify({ version: EXTERNAL_DEFAULTS_VERSION, entries: candidate }, null, 2)}\n`, 'utf8');
         await handle.sync();
       } finally {
         await handle.close();

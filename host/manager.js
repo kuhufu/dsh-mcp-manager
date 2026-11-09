@@ -4,6 +4,8 @@
  * @module @kuhufu/dsh-mcp-manager/host/manager
  */
 
+import path from 'node:path';
+
 import { createAgentRegistry } from './agents.js';
 import { formatError } from './errors.js';
 import { createExternalOperations } from './external.js';
@@ -500,23 +502,27 @@ export function createMcpManager({ ctx, logger }) {
     }
     if (verb === 'on' || verb === 'off') {
       if (target === '') return { kind: 'error', text: `Usage: /mcp ${verb} <server>` };
-      const server = store.list().find((item) => item.name === target || item.id === target);
-      if (server !== undefined) {
-        await sessionState.set(sessionId, server.id, verb === 'on');
-        agents.syncSession(sessionId);
-        applyDesired();
-        return { kind: 'success', text: `"${server.name}" is now ${verb} for this session.\n${describeSession(sessionView(sessionId))}` };
-      }
-      const externalRow = external().find((item) => item.serverName === target || item.entryId === target);
-      if (externalRow !== undefined) {
-        if (verb === 'on' && externalRow.enabled !== true) {
-          return { kind: 'error', text: `"${target}" is disabled in the profile; enable it on the settings page first.` };
+      // Serialize with save/remove/toggle so a command cannot reconcile against
+      // a store snapshot that another mutation is replacing.
+      return enqueue(async () => {
+        const server = store.list().find((item) => item.name === target || item.id === target);
+        if (server !== undefined) {
+          await sessionState.set(sessionId, server.id, verb === 'on');
+          agents.syncSession(sessionId);
+          applyDesired();
+          return { kind: 'success', text: `"${server.name}" is now ${verb} for this session.\n${describeSession(sessionView(sessionId))}` };
         }
-        await sessionState.setExternal(sessionId, externalRow.entryId, verb === 'on');
-        agents.syncSession(sessionId);
-        return { kind: 'success', text: `"${target}" is now ${verb} for this session.\n${describeSession(sessionView(sessionId))}` };
-      }
-      return { kind: 'error', text: `No MCP server named "${target}".` };
+        const externalRow = external().find((item) => item.serverName === target || item.entryId === target);
+        if (externalRow !== undefined) {
+          if (verb === 'on' && externalRow.enabled !== true) {
+            return { kind: 'error', text: `"${target}" is disabled in the profile; enable it on the settings page first.` };
+          }
+          await sessionState.setExternal(sessionId, externalRow.entryId, verb === 'on');
+          agents.syncSession(sessionId);
+          return { kind: 'success', text: `"${target}" is now ${verb} for this session.\n${describeSession(sessionView(sessionId))}` };
+        }
+        return { kind: 'error', text: `No MCP server named "${target}".` };
+      });
     }
     return { kind: 'error', text: `Unknown argument "${verb}". Use list, on <server>, off <server> or reset.` };
   }
@@ -560,10 +566,25 @@ export function createMcpManager({ ctx, logger }) {
   function repairPatch() {
     return enqueue(async () => {
       const home = resolveDshHome();
-      const profile = process.env.DSH_PROFILE ?? 'desktop';
+      let profilePatch;
+      try {
+        const profile = typeof ctx.get === 'function' ? ctx.get('profileContext') : undefined;
+        if (profile !== undefined && profile !== null && typeof profile.patchPath === 'string' && profile.patchPath !== '') {
+          profilePatch = profile.patchPath;
+        }
+      } catch {
+        /* profileContext is optional; fall back to the environment below */
+      }
+      if (profilePatch === undefined) {
+        const profile = typeof process.env.DSH_PROFILE === 'string' ? process.env.DSH_PROFILE.trim() : '';
+        if (profile === '') {
+          return { moved: [], problems: ['the profile patch path is unavailable; skipping cross-layer repair'], backups: [] };
+        }
+        profilePatch = path.join(home, 'profiles', profile, 'cordis.patch.yml');
+      }
       const report = await repairPatchLayers({
-        homePatch: `${home}/cordis.patch.yml`,
-        profilePatch: `${home}/profiles/${profile}/cordis.patch.yml`,
+        homePatch: path.join(home, 'cordis.patch.yml'),
+        profilePatch,
       });
       if (report.moved.length > 0) warn(`moved duplicate patch entries into the profile layer: ${report.moved.join(', ')}`);
       return report;
