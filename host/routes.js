@@ -35,23 +35,23 @@ export const EXTERNAL_TOGGLE_PATH = '/api/mcp-manager.toggle-external';
 /** Absolute path of the page-preference route (`ui.railEntry`). */
 export const UI_PATH = '/api/mcp-manager.ui';
 /** Absolute path of the batch configuration import route. */
-export const IMPORT_PATH = '/api/mcp-manager.import';
+const IMPORT_PATH = '/api/mcp-manager.import';
 /** Absolute path of the direct third-party MCP JSON import route. */
-export const IMPORT_JSON_PATH = '/api/mcp-manager.import-json';
+const IMPORT_JSON_PATH = '/api/mcp-manager.import-json';
 /** Absolute path of the configuration export route. */
-export const EXPORT_PATH = '/api/mcp-manager.export';
+const EXPORT_PATH = '/api/mcp-manager.export';
 /** Absolute path of the storage recovery route. */
-export const RECOVER_PATH = '/api/mcp-manager.recover';
+const RECOVER_PATH = '/api/mcp-manager.recover';
 /** Absolute path of the individual tool enablement route. */
-export const TOOL_PATH = '/api/mcp-manager.tool';
+const TOOL_PATH = '/api/mcp-manager.tool';
 /** Absolute path of the per-Session MCP visibility route. */
-export const SESSION_PATH = '/api/mcp-manager.session';
+const SESSION_PATH = '/api/mcp-manager.session';
 /** Absolute path of the per-Session override route. */
-export const SESSION_SET_PATH = '/api/mcp-manager.session-set';
+const SESSION_SET_PATH = '/api/mcp-manager.session-set';
 /** Absolute path of the external-entry default-injection route. */
-export const EXTERNAL_DEFAULT_PATH = '/api/mcp-manager.external-default';
+const EXTERNAL_DEFAULT_PATH = '/api/mcp-manager.external-default';
 /** Absolute path of the duplicate-declaration repair route. */
-export const REPAIR_PATCH_PATH = '/api/mcp-manager.repair-patch';
+const REPAIR_PATCH_PATH = '/api/mcp-manager.repair-patch';
 
 /** Every path this bundle owns, in registration order. */
 export const ROUTE_PATHS = Object.freeze([
@@ -88,6 +88,8 @@ export function serverView(server, state) {
     view.status = 'stopped';
     view.tools = [];
     view.toolCount = 0;
+    view.logs = [];
+    view.retryAttempt = 0;
     return view;
   }
   view.status = state.status;

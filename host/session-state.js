@@ -20,16 +20,17 @@
  * @module @kuhufu/dsh-mcp-manager/host/session-state
  */
 
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isRecord, resolveDshHome } from './store.js';
+import { writeFileAtomic } from './atomic-file.js';
+import { isRecord, resolveDshHome, ManagerError } from './store.js';
 
 /** Persisted document version. */
-export const SESSION_STORAGE_VERSION = 1;
+const SESSION_STORAGE_VERSION = 1;
 
 /** Relative path of the session-override document below `DSH_HOME`. */
-export const SESSION_STORAGE_RELATIVE_PATH = path.join('storages', 'mcp-manager-sessions.json');
+const SESSION_STORAGE_RELATIVE_PATH = path.join('storages', 'mcp-manager-sessions.json');
 
 /**
  * Coerce one persisted Session entry into the pinned shape.
@@ -83,7 +84,9 @@ export function createSessionState(options = {}) {
   /** @type {Promise<void>|undefined} */
   let loading;
   let writeChain = Promise.resolve();
-  let tempSequence = 0;
+  /** Exact bytes this store last read or wrote; see `writeSnapshot`. */
+  let baseline = '';
+  let baselineKnown = false;
 
   const warn = (message) => {
     if (typeof logger?.warn === 'function') logger.warn(`mcp-manager: ${message}`);
@@ -95,6 +98,9 @@ export function createSessionState(options = {}) {
       raw = await readFile(file, 'utf8');
     } catch (error) {
       if (error?.code !== 'ENOENT') warn(`could not read ${file}: ${error?.message ?? String(error)}`);
+      // A missing document is a known state: the next write may create it.
+      baseline = '';
+      baselineKnown = error?.code === 'ENOENT';
       return {};
     }
     let document;
@@ -102,14 +108,17 @@ export function createSessionState(options = {}) {
       document = JSON.parse(raw);
     } catch {
       warn(`ignoring unreadable JSON at ${file}`);
+      baselineKnown = false;
       return {};
     }
     if (!isRecord(document) || !isRecord(document.sessions)) {
       warn(`ignoring ${file}: expected an object with a sessions map`);
+      baselineKnown = false;
       return {};
     }
     if (document.version !== undefined && document.version !== SESSION_STORAGE_VERSION) {
       warn(`ignoring ${file}: unsupported document version ${String(document.version)}`);
+      baselineKnown = false;
       return {};
     }
     /** @type {Record<string, { overrides: Record<string, boolean>, updatedAt: number }>} */
@@ -118,6 +127,8 @@ export function createSessionState(options = {}) {
       const entry = coerceEntry(value);
       if (entry !== undefined) accepted[sessionId] = entry;
     }
+    baseline = raw;
+    baselineKnown = true;
     return accepted;
   }
 
@@ -138,21 +149,23 @@ export function createSessionState(options = {}) {
 
   async function writeSnapshot(candidate) {
     const payload = `${JSON.stringify({ version: SESSION_STORAGE_VERSION, sessions: candidate }, null, 2)}\n`;
-    await mkdir(path.dirname(file), { recursive: true });
-    const temporary = `${file}.tmp-${process.pid}-${tempSequence += 1}`;
-    try {
-      const handle = await open(temporary, 'wx', 0o600);
-      try {
-        await handle.writeFile(payload, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
+    if (baselineKnown) {
+      let current;
+      try { current = await readFile(file, 'utf8'); }
+      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      if ((current ?? '') !== baseline) {
+        // Another process replaced the document; follow it and let the caller retry.
+        sessions = await readDocument();
+        throw new ManagerError('conflict', `${file} was changed by another process; the session overrides were reloaded, retry the change`);
       }
-      await rename(temporary, file);
+    }
+    try {
+      await writeFileAtomic(file, payload);
     } catch (error) {
-      await rm(temporary, { force: true }).catch(() => {});
       throw new Error(`could not persist session overrides to ${file}: ${error?.message ?? String(error)}`);
     }
+    baseline = payload;
+    baselineKnown = true;
   }
 
   function enqueue(task) {
@@ -253,7 +266,6 @@ export function createSessionState(options = {}) {
   }
 
   return {
-    file,
     load,
     overridesOf,
     externalOverridesOf,

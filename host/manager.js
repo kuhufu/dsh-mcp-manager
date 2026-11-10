@@ -90,10 +90,10 @@ export function createMcpManager({ ctx, logger }) {
     return tracked;
   }
 
-  const { stateOf, startServer, stopServer, reconnectServer, reconcile, updateTools, applyDesired: applyRuntimeDesired, definitionsOf, generationOf, revisionOf, subscribe, stopAll, forget, hasTool } = createRuntime({ ctx, store, logger, track, warn, fail, isDisposed: () => disposed });
+  const { stateOf, stopServer, reconnectServer, updateTools, applyDesired: applyRuntimeDesired, definitionsOf, revisionOf, subscribe, stopAll, forget, hasTool, registrationFailed, registrationRecovered } = createRuntime({ store, logger, track, warn, fail, isDisposed: () => disposed });
   const sessionState = createSessionState({ logger });
   const externalDefaults = createExternalDefaults({ logger });
-  const agents = createAgentRegistry({ runtime: { definitionsOf, revisionOf, subscribe }, sessionState, listServers: () => store.list(), listExternal: () => external(), listToolSchemas: () => ctx.tools.schemas(), autoInjectOf: (entryId) => externalDefaults.autoInjectOf(entryId), warn });
+  const agents = createAgentRegistry({ runtime: { definitionsOf, revisionOf, subscribe, registrationFailed, registrationRecovered }, sessionState, listServers: () => store.list(), listExternal: () => external(), listToolSchemas: () => ctx.tools.schemas(), autoInjectOf: (entryId) => externalDefaults.autoInjectOf(entryId), warn });
   // Our own registrations change the catalog too; invalidate on every definition
   // swap instead of relying on the Host to emit `tools/change` for them.
   const unsubscribeDefinitions = subscribe(() => { toolsGeneration += 1; });
@@ -153,6 +153,10 @@ export function createMcpManager({ ctx, logger }) {
       await sessionState.load();
       await externalDefaults.load();
       pruneSessions();
+      // A plugin that is enabled (or hot-reloaded) in a running deployment finds
+      // live Agents that will never emit `agent/created` again; attach them so
+      // their Sessions still get the MCP tools.
+      attachExistingAgents();
       // A cross-layer duplicate cannot be toggled from the UI; repair it before
       // the user hits that dead end. No duplicates means no write.
       try {
@@ -168,11 +172,48 @@ export function createMcpManager({ ctx, logger }) {
   }
 
   /**
-   * Create or replace one server record, then reconcile its connection.
-   * @param {{ id?: string, server: unknown }} payload - route payload.
-   * @returns {Promise<{ id: string, servers: object[] }>} new id plus fresh views.
+   * Attach Agents that already exist when this bundle loads.
+   *
+   * `agent/created` only reaches Agents created after activation, so enabling or
+   * hot-reloading the plugin in a running Harness would otherwise leave every
+   * live Session without MCP tools until a new Agent is created. The optional
+   * `agents` service is read defensively: deployments without it keep the
+   * listener-only behavior.
    */
-  /** Drop session overrides whose Session no longer exists. */
+  function attachExistingAgents() {
+    let registry;
+    try {
+      registry = typeof ctx.get === 'function' ? ctx.get('agents') : undefined;
+    } catch {
+      return;
+    }
+    if (registry === undefined || registry === null) return;
+    const candidates = [];
+    for (const method of ['list', 'roots']) {
+      if (typeof registry[method] !== 'function') continue;
+      try {
+        const items = registry[method]();
+        if (Array.isArray(items)) candidates.push(...items);
+      } catch (error) {
+        warn(`could not list live agents: ${formatError(error)}`);
+      }
+    }
+    for (const item of candidates) {
+      // `list()` may hand back Agents or the handles wrapping them.
+      const agent = item?.agent ?? item;
+      if (agent === null || typeof agent !== 'object') continue;
+      if (!agent.session && !agent.ctx) continue;
+      try {
+        agents.attach(agent);
+      } catch (error) {
+        warn(`could not attach an existing agent: ${formatError(error)}`);
+      }
+    }
+  }
+
+  /**
+   * Drop session overrides whose Session no longer exists.
+   */
   function pruneSessions() {
     try {
       const sessions = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined;
@@ -186,6 +227,11 @@ export function createMcpManager({ ctx, logger }) {
     }
   }
 
+  /**
+   * Create or replace one server record, then reconcile its connection.
+   * @param {{ id?: string, server: unknown }} payload - route payload.
+   * @returns {Promise<{ id: string, servers: object[] }>} new id plus fresh views.
+   */
   function save(payload) {
     return enqueue(async () => {
       await store.load();
@@ -257,7 +303,19 @@ export function createMcpManager({ ctx, logger }) {
     return enqueue(async () => {
       await store.load();
       const server = requireServer(payload.id);
-      if (desiredServerIds().has(server.id)) reconnectServer(server);
+      // A manual reconnect cannot start a connection nothing asked for: a
+      // default-off server only connects while some Session shows it. Say so
+      // instead of answering `ok` with an unchanged list.
+      if (!desiredServerIds().has(server.id)) {
+        throw new ManagerError(
+          'invalid',
+          server.enabled === false
+            ? `"${server.name}" is disabled; enable it before reconnecting`
+            : `"${server.name}" is not injected by default; show it for this session from /mcp before reconnecting`,
+          'id',
+        );
+      }
+      reconnectServer(server);
       return { servers: list() };
     });
   }

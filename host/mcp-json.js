@@ -15,10 +15,10 @@
  * @module @kuhufu/dsh-mcp-manager/host/mcp-json
  */
 
-import { CONNECTION_OPTIONS, ManagerError, isRecord, validateServerInput } from './store.js';
+import { CONNECTION_OPTIONS, ManagerError, isHttpUrl, isRecord, setOwn, validateServerInput } from './store.js';
 
 /** Maximum number of server entries one document may import. */
-export const MAX_IMPORT_ENTRIES = 200;
+const MAX_IMPORT_ENTRIES = 200;
 
 /** `type`/`transport` spellings that mean the stdio transport. */
 const STDIO_TYPES = new Set(['stdio', 'command', 'process']);
@@ -40,7 +40,7 @@ const NON_SERVER_KEYS = new Set(['inputs', '$schema', 'version', 'name', 'descri
  * @param {unknown} raw - name taken from a document key or `name` field.
  * @returns {string} a grammar-valid name of 1–32 characters.
  */
-export function sanitizeServerName(raw) {
+function sanitizeServerName(raw) {
   const text = typeof raw === 'string' ? raw.trim() : '';
   let name = text.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (name.length > 32) name = name.slice(0, 32).replace(/-+$/g, '');
@@ -54,7 +54,7 @@ export function sanitizeServerName(raw) {
  * @param {Set<string>} taken - names already present (existing records and earlier entries).
  * @returns {string} `base`, or `base-2`, `base-3`, … that no one has claimed.
  */
-export function uniqueServerName(base, taken) {
+function uniqueServerName(base, taken) {
   if (!taken.has(base)) return base;
   for (let suffix = 2; ; suffix += 1) {
     const tail = `-${suffix}`;
@@ -74,7 +74,7 @@ export function uniqueServerName(base, taken) {
  * @returns {{ name: unknown, config: unknown }[]} candidates in document order.
  * @throws {ManagerError} `invalid` when the document declares no servers or too many.
  */
-export function readMcpJsonEntries(document) {
+function readMcpJsonEntries(document) {
   /** @type {{ name: unknown, config: unknown }[]} */
   let candidates = [];
   if (Array.isArray(document)) {
@@ -325,8 +325,8 @@ function stringMap(value, keyPattern, notes) {
       notes.push('dropped-fields');
       continue;
     }
-    if (typeof item === 'string') out[key] = item;
-    else if (typeof item === 'number' || typeof item === 'boolean') out[key] = String(item);
+    if (typeof item === 'string') setOwn(out, key, item);
+    else if (typeof item === 'number' || typeof item === 'boolean') setOwn(out, key, String(item));
     else notes.push('dropped-fields');
   }
   return out;
@@ -344,21 +344,6 @@ function stringMap(value, keyPattern, notes) {
 function mentionsInputPlaceholder(config) {
   const fields = [config.command, config.url, config.cwd, config.env, config.headers, config.args];
   return fields.some((value) => JSON.stringify(value ?? null).includes('${input:'));
-}
-
-/**
- * Validate one absolute http(s) URL without throwing.
- *
- * @param {string} url - candidate endpoint.
- * @returns {boolean} whether the endpoint is usable.
- */
-function isHttpUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 /**

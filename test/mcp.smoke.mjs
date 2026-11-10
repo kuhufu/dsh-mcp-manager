@@ -37,12 +37,10 @@ import {
 } from '../host/mcp.js';
 import {
   ROUTE_PATHS,
-  EXTERNAL_TOGGLE_PATH,
   LIST_PATH,
   RECONNECT_PATH,
   REMOVE_PATH,
   SAVE_PATH,
-  TAKEOVER_PATH,
   TOGGLE_PATH,
   UI_PATH,
   createFetchRoutes,

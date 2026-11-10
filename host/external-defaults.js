@@ -8,16 +8,17 @@
  * @module @kuhufu/dsh-mcp-manager/host/external-defaults
  */
 
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isRecord, resolveDshHome } from './store.js';
+import { writeFileAtomic } from './atomic-file.js';
+import { ManagerError, isRecord, resolveDshHome } from './store.js';
 
 /** Persisted document version. */
-export const EXTERNAL_DEFAULTS_VERSION = 1;
+const EXTERNAL_DEFAULTS_VERSION = 1;
 
 /** Relative path of the document below `DSH_HOME`. */
-export const EXTERNAL_DEFAULTS_RELATIVE_PATH = path.join('storages', 'mcp-manager-external.json');
+const EXTERNAL_DEFAULTS_RELATIVE_PATH = path.join('storages', 'mcp-manager-external.json');
 
 /**
  * Create the external-entry default store.
@@ -32,54 +33,80 @@ export function createExternalDefaults(options = {}) {
   let loaded = false;
   let loading;
   let writeChain = Promise.resolve();
+  /** Exact bytes this store last read or wrote; see `writeSnapshot`. */
+  let baseline = '';
+  let baselineKnown = false;
 
   const warn = (message) => {
     if (typeof logger?.warn === 'function') logger.warn(`mcp-manager: ${message}`);
   };
 
   async function readDocument() {
+    let raw;
     try {
-      const document = JSON.parse(await readFile(file, 'utf8'));
-      if (isRecord(document) && document.version !== undefined && document.version !== EXTERNAL_DEFAULTS_VERSION) {
-        warn(`ignoring ${file}: unsupported document version ${String(document.version)}`);
-        return;
-      }
-      if (isRecord(document) && isRecord(document.entries)) {
-        for (const [entryId, autoInject] of Object.entries(document.entries)) {
-          if (entryId !== '' && typeof autoInject === 'boolean') entries[entryId] = autoInject;
-        }
-      }
+      raw = await readFile(file, 'utf8');
     } catch (error) {
       if (error?.code !== 'ENOENT') warn(`ignoring ${file}: ${error?.message ?? String(error)}`);
+      baseline = '';
+      baselineKnown = error?.code === 'ENOENT';
+      return {};
     }
+    let document;
+    try {
+      document = JSON.parse(raw);
+    } catch (error) {
+      warn(`ignoring ${file}: ${error?.message ?? String(error)}`);
+      baselineKnown = false;
+      return {};
+    }
+    if (isRecord(document) && document.version !== undefined && document.version !== EXTERNAL_DEFAULTS_VERSION) {
+      warn(`ignoring ${file}: unsupported document version ${String(document.version)}`);
+      baselineKnown = false;
+      return {};
+    }
+    /** @type {Record<string, boolean>} */
+    const next = {};
+    if (isRecord(document) && isRecord(document.entries)) {
+      for (const [entryId, autoInject] of Object.entries(document.entries)) {
+        if (entryId !== '' && typeof autoInject === 'boolean') next[entryId] = autoInject;
+      }
+    }
+    baseline = raw;
+    baselineKnown = true;
+    return next;
   }
 
   function load() {
     if (loaded) return Promise.resolve();
-    loading ??= readDocument().then(() => { loaded = true; });
+    loading ??= readDocument().then((document) => {
+      entries = document;
+      loaded = true;
+    });
     return loading;
   }
 
   async function writeSnapshot(candidate) {
-    await mkdir(path.dirname(file), { recursive: true });
-    const temporary = `${file}.tmp-${process.pid}-${Date.now()}`;
-    try {
-      const handle = await open(temporary, 'wx', 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify({ version: EXTERNAL_DEFAULTS_VERSION, entries: candidate }, null, 2)}\n`, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
+    if (baselineKnown) {
+      let current;
+      try { current = await readFile(file, 'utf8'); }
+      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      if ((current ?? '') !== baseline) {
+        // Another process replaced the document; follow it and let the caller retry.
+        entries = await readDocument();
+        throw new ManagerError('conflict', `${file} was changed by another process; the default-injection flags were reloaded, retry the change`);
       }
-      await rename(temporary, file);
+    }
+    const payload = `${JSON.stringify({ version: EXTERNAL_DEFAULTS_VERSION, entries: candidate }, null, 2)}\n`;
+    try {
+      await writeFileAtomic(file, payload);
     } catch (error) {
-      await rm(temporary, { force: true }).catch(() => {});
       throw new Error(`could not persist external defaults: ${error?.message ?? String(error)}`);
     }
+    baseline = payload;
+    baselineKnown = true;
   }
 
   return {
-    file,
     load,
     /** @param {string} entryId - Loader entry id. @returns {boolean} whether it is injected by default. */
     autoInjectOf: (entryId) => entries[entryId] !== false,

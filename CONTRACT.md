@@ -19,6 +19,7 @@ Both halves are plain JavaScript (no build step). The Client half is a browser b
 - `host/profile-patch.js`: targeted profile-patch repair with a backup.
 - `host/patch-repair.js`: cross-layer duplicate repair with a top-level-array guard.
 - `host/errors.js`: shared Host diagnostic formatting.
+- `host/atomic-file.js`: the atomic write and never-overwrite backup used by every persisted document and patch writer.
 - `host/mcp.js`, `host/mcp-json.js`, `host/store.js`, `host/routes.js`: transport, third-party import normalization, persistence and wire adapters.
 - `client.js`: one browser factory containing a data hook and React components for recovery,
   transfer and presentation; these are logical boundaries within the same distributable file.
@@ -66,6 +67,15 @@ its original bytes so tolerated bad records are not silently discarded.
 Recovery archives the original bytes in `mcp-manager.json.recovery-<time>-<uuid>` before restoring
 the validated backup or resetting to defaults. No damaged document is silently overwritten.
 
+Every write first re-reads the document and compares it with the bytes this process last read or
+wrote. A difference means another Harness instance sharing the same `DSH_HOME` replaced the file:
+the store follows the on-disk document and refuses the write with the `conflict` code instead of
+dropping the other writer's records. The same guard protects `mcp-manager-sessions.json` and
+`mcp-manager-external.json`. Connections are per process, so one deployment should run a single
+Harness instance per `DSH_HOME`; two instances otherwise also spawn every MCP server twice.
+
+Env and header keys are stored verbatim, including names such as `__proto__`, which are written
+as own properties rather than through the prototype setter.
 Foreign `dsh-mcp-client` entries keep their configuration in the profile patch; their
 default-injection flags live in `<DSH_HOME>/storages/mcp-manager-external.json`:
 
@@ -226,14 +236,21 @@ stuck row is repaired before the user opens the page.
 Failure shape (HTTP 200 with `ok: false`, or 4xx only for malformed JSON):
 
 ```json
-{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "unsupported" | "storage-readonly" | "internal",
+{ "ok": false, "error": { "code": "invalid" | "duplicate-name" | "not-found" | "overridden" | "unsupported" | "conflict" | "storage-readonly" | "internal",
                           "message": "…", "field": "name?" } }
 ```
 
 `ServerInput` is `Server` without `id`/`createdAt` (all other fields accepted; unknown fields dropped).
 `ServerView` is `Server` plus the flattened runtime status fields above
 (`status`, `error`, `tools`, `toolCount`, `serverInfo`, `instructions`, `connectedAt`,
-`protocolVersion`, `retryAttempt`, `nextRetryAt`, `logs`).
+`protocolVersion`, `retryAttempt`, `nextRetryAt`, `logs`). `logs` and `retryAttempt` are always
+present (`[]`/`0` before the first connection); `nextRetryAt` is present only while a retry is
+scheduled.
+
+`conflict` means another process replaced the storage document between the last read and the
+write; the in-memory state already follows the document, so the caller reloads and retries.
+`reconnect` refuses a server nothing asked to connect (`autoInject: false` with no Session showing
+it, or a disabled record) with `invalid` instead of answering `ok` without a new connection.
 
 ### Validation rules (Host, authoritative)
 
@@ -256,11 +273,15 @@ configuration:
 - Tools are registered on `agent.ctx` (the documented per-agent composition scope) from an
   `agent/created` listener and released on `agent/disposed`; hiding a server therefore removes
   its tools from that Session's Agent only. Unloading the plugin releases every registration.
+  Agents that already exist when the bundle loads (enablement or hot reload) are attached from the
+  optional `agents` service (`list()`/`roots()`), so live Sessions are not left without tools.
 - A server stays connected while any Session explicitly shows it, so `/mcp on` can reveal a
   globally disabled server without enabling it for everyone.
 - `session` / `session-set` are the panel's routes; `SessionServerView` is
   `{ id, name, enabled, status, toolCount, autoInject, visible }`, and the same payload carries
   `external: { entryId, serverName, enabled, toolCount, autoInject, visible }[]`.
+  The `/mcp` surfaces derive the shown phase from `visible` first, so a server this Session shows
+  is reported by its real connection state (never "disabled" just because the global switch is off).
 - `autoInject: false` on a managed server or a foreign entry makes it default-off: it stays
   disconnected (or unregistered) until a Session explicitly shows it with `/mcp on`. The
   preference persists in the server record or `mcp-manager-external.json`, not in session state.
@@ -287,16 +308,26 @@ configuration:
 For each `ready` server, register `ctx.tools.register({...})` per MCP tool:
 
 - public name: `mcp__<name>__<rawName>` with every char outside `[A-Za-z0-9_-]` replaced by `_`,
-  truncated to 64 chars; collisions resolved by appending `_2`, `_3`, … (deterministic per server).
+  truncated to 64 chars; collisions inside one server resolved by appending `_2`, `_3`, …
+  (deterministic per server). A collision **between** servers is detected before registering and
+  reported as that server's `status: "error"` with a message naming the tool, instead of silently
+  registering nothing; the runtime clears the error once a later sync succeeds (for example after
+  the conflicting server is removed or hidden for the Session).
 - `description`: MCP tool description, or `Tool <rawName> from MCP server <name>`.
-- `parameters`: the MCP `inputSchema`, or `{ "type": "object", "properties": {} }`.
+- `parameters`: the MCP `inputSchema`, or `{ "type": "object", "properties": {} }`. A schema
+  larger than 64 KiB (UTF-8 JSON) is dropped to the empty object and reported in the server's
+  activity log.
 - `output`: `{ schema: { type: "object", properties: { content: { type: "array", items: {} }, structuredContent: {} }, required: ["content"], additionalProperties: false }, render: () => [{ type: "text", text: <flattened content> }] }`
 - `execute(args, exec)`: `tools/call` for that raw name; MCP `isError: true` must throw an Error
   carrying the flattened text; otherwise return `{ content, structuredContent? }`.
 - Text blocks (`{type:"text",text}`) are flattened joined by `\n`; non-text blocks become
   `[<type> content from <tool>]` diagnostics (no image persistence in v1).
-- Registering/disconnecting swaps the whole tool set atomically; a dispose from plugin unload
-  removes every tool and kills every child process.
+- Registering/disconnecting swaps the whole tool set atomically; a failed replacement restores the
+  previous executable definitions, and a dispose from plugin unload removes every tool and kills
+  every child process.
+- The advertised catalog is bounded: more than 512 tools, or more than 8 MiB of serialized schemas,
+  fails the handshake with a visible error instead of registering an unbounded tool set on every
+  Agent.
 
 ## Connection lifecycle
 
@@ -306,6 +337,11 @@ RPC distinguishes server requests, notifications and responses. Pings receive re
 unknown server requests receive method-not-found. Timeout/cancel abort the individual HTTP
 request and send best-effort cancellation (except initialize). All close paths release active
 HTTP work and terminate sessions, including after transport failure.
+
+`initializeTimeoutMs` bounds the **whole handshake** — the `initialize` request, the
+`notifications/initialized` notification and every `tools/list` page — so a server that answers
+`initialize` and then stalls cannot hold the attempt for the tool timeout. `requestTimeoutMs`
+bounds each tool call and each post-handshake catalog refresh.
 
 When advertised, HTTP uses an optional GET SSE stream for notifications (405 is tolerated).
 `notifications/tools/list_changed` refreshes the full catalog without restarting the server;

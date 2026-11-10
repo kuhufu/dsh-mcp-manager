@@ -128,6 +128,10 @@ and start the app again. Running the plugin command while the app is up can race
 | Show in the sidebar | Installs or removes the left-rail entry; the Settings page is unaffected. |
 | Foreign entry switch | Enables or disables that `dsh-mcp-client` row, the same as **Settings → Plugins**. The switch is locked when a managed record already owns the name. |
 
+**Reconnect** only applies to a server that is currently wanted: a default-off server that no
+Session shows is stopped, so the control is disabled and explains why instead of performing a
+silent no-op.
+
 ### Tool naming
 
 Tools are registered as `mcp__<serverName>__<rawToolName>`, with every character outside
@@ -215,6 +219,11 @@ format):
 
 - Writes are serialized and atomic (temporary file + `rename`), memory is committed only after
   persistence succeeds, and files are created with `0600` permissions.
+- Every write re-reads the document and compares it with the bytes this process last read or wrote.
+  If another Harness instance sharing the same `DSH_HOME` changed it, the write fails with
+  `conflict` and follows the on-disk document instead of dropping the other writer's records; all
+  three storage files carry that guard. Connections are per process, so run one Harness instance
+  per `DSH_HOME` — two instances also spawn every MCP server twice.
 - A corrupt, unreadable or unsupported-version document enters read-only recovery instead of being
   overwritten. Backup restore and reset archive the original bytes as
   `.recovery-<time>-<uuid>` first. Legacy documents without `version` or `ui` remain readable and
@@ -243,6 +252,7 @@ Host modules:
 | `host/profile-patch.js` / `patch-repair.js` | Duplicate-declaration repair in profile/home patches |
 | `host/mcp.js` / `mcp-json.js` | Dependency-free MCP client and third-party config normalizer |
 | `host/store.js` | Validation, atomic persistence and recovery |
+| `host/atomic-file.js` | Atomic writes and never-overwrite backups, shared by all three documents and both patch writers |
 | `host/routes.js` | Fetch routes and response shaping |
 
 All page traffic uses exact `POST` routes on the Harness Fetch bridge (relative
@@ -278,8 +288,9 @@ npm run test:browser    # after preparing the environment in test/BROWSER.md
 ```
 
 - Smoke suites: `mcp` 29 checks, `external` 97, `takeover-race` 8, `patch-repair` 27.
-- Node: 39 `regression` + 21 `client` tests, 60 in total, covering dual-entry sync, stale poll
-  responses, cancellation, failed writes, recovery, dynamic tools, page races and direct-import
+- Node: 47 `regression` + 24 `client` tests, 71 in total, covering dual-entry sync, stale poll
+  responses, cancellation, failed and concurrent writes, recovery, dynamic tools, registration
+  collisions, the handshake budget, the tool-catalog caps, page races and direct-import
   normalization.
 - The browser suite runs a real React 18 page against real Host routes and a local fake MCP server.
   It covers add/edit/duplicate/delete, connection options, tool switches, import/export, direct MCP
@@ -330,6 +341,9 @@ the bottom of the page.
 - MCP prompts and resources are not supported (matching the official `dsh-mcp-client` bridge).
 - A cross-server tool-name collision fails that server's registration with an error state rather
   than renaming silently.
+- The tool catalog is bounded: at most 512 tools per server, 64 KiB per `inputSchema`, and 8 MiB
+  for the whole catalog. Exceeding a limit fails the handshake with a visible error (an oversized
+  single schema degrades to an open parameter object and is reported in the activity log).
 
 ## License
 

@@ -17,8 +17,9 @@
  * @module @kuhufu/dsh-mcp-manager/host/patch-repair
  */
 
-import { copyFile, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+
+import { copyFileOnce, writeFileAtomic } from './atomic-file.js';
 
 /** @typedef {{ id: string, text: string, start?: number, end?: number }} PatchEntry */
 
@@ -27,7 +28,7 @@ import path from 'node:path';
  * @param {string} text - patch file contents.
  * @returns {{ start: number, end: number, entries: PatchEntry[] } | undefined} span and entries.
  */
-export function findFlowInsert(text) {
+function findFlowInsert(text) {
   const marker = /(^|[\s[{,])insert\s*:/m.exec(text);
   if (marker === null) return undefined;
   const open = text.indexOf('[', marker.index + marker[0].length);
@@ -89,7 +90,7 @@ function findInlineFlowInsert(text) {
  * @param {string} text - patch file contents.
  * @returns {{ start: number, end: number, entries: PatchEntry[], block: true } | undefined} item span and entries.
  */
-export function findBlockInsert(text) {
+function findBlockInsert(text) {
   const lines = lineSpans(text);
   const index = lines.findIndex((line) => /^-\s+insert\s*:\s*(?:#.*)?$/.test(line.text));
   if (index < 0) return undefined;
@@ -160,7 +161,7 @@ function matchBracket(text, open, left, right) {
  * @param {string} text - patch file contents.
  * @returns {Set<string>} ids declared outside `insert` blocks.
  */
-export function declaredIds(text) {
+function declaredIds(text) {
   const ids = new Set();
   for (const match of text.matchAll(/^\s*-\s+id\s*:\s*["']?([A-Za-z0-9._:-]+)["']?\s*$/gm)) ids.add(match[1]);
   return ids;
@@ -301,11 +302,11 @@ export async function repairPatchLayers({ homePatch, profilePatch, stamp = Strin
     return { moved: [], problems: [`${profilePatch} would no longer be a top-level YAML array`], backups };
   }
 
-  backups.push(await backup(homePatch, stamp), await backup(profilePatch, stamp));
+  backups.push(await copyFileOnce(homePatch, `bak-${stamp}`), await copyFileOnce(profilePatch, `bak-${stamp}`));
   // Write the profile first: if the home write then fails, the entry exists in
   // both layers (a duplicate, repaired on the next run) instead of being lost.
-  await writeAtomic(profilePatch, nextProfile);
-  await writeAtomic(homePatch, nextHome);
+  await writeFileAtomic(profilePatch, nextProfile);
+  await writeFileAtomic(homePatch, nextHome);
   return { moved: moving.map((entry) => entry.id), problems, backups };
 }
 
@@ -452,39 +453,4 @@ function lineSpans(text) {
  */
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Copy one file next to itself before rewriting it.
- * @param {string} file - path to snapshot.
- * @param {string} stamp - suffix for the copy.
- * @returns {Promise<string>} backup path.
- */
-async function backup(file, stamp) {
-  const target = `${file}.bak-${stamp}`;
-  await copyFile(file, target);
-  return target;
-}
-
-/**
- * Replace one file atomically with mode 0600.
- * @param {string} file - target path.
- * @param {string} contents - new contents.
- * @returns {Promise<void>} settles after the rename.
- */
-async function writeAtomic(file, contents) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    const handle = await open(temporary, 'wx', 0o600);
-    try {
-      await handle.writeFile(contents, 'utf8');
-    } finally {
-      await handle.close();
-    }
-    await rename(temporary, file);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => {});
-    throw error;
-  }
 }

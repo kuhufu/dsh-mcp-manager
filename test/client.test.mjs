@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { CONNECTION_OPTIONS } from '../host/store.js';
 const source = (await readFile(new URL('../client.js', import.meta.url), 'utf8')).replace(
   'return { NS, inject, apply };',
-  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, CONNECTION_OPTIONS, McpSessionPanel, openSessionPanel, closeSessionPanel, parseConfigText, previewEntries, previewTransport, previewTarget, importWarningText, ImportJsonDialog };',
+  'return { NS, inject, apply, useManagerData, McpManagerSection, validateDraft, draftOf, parsePairs, directTranslator, ServerDialog, ServerRow, sessionPhaseOf, CONNECTION_OPTIONS, McpSessionPanel, openSessionPanel, closeSessionPanel, parseConfigText, previewEntries, previewTransport, previewTarget, importWarningText, ImportJsonDialog };',
 );
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -193,6 +193,39 @@ test('a late read from one surface cannot replace a newer snapshot from another'
   f.requests[1].reply(payload(false)); await flush();
   f.requests[0].reply(payload(true)); await flush();
   assert.equal(first.render().railEntry, false); assert.equal(second.render().railEntry, false);
+});
+
+test('a server shown for a session is never reported as disabled', () => {
+  const f = fixture();
+  assert.equal(f.api.sessionPhaseOf({ visible: true, enabled: false, status: 'ready' }), 'ready');
+  assert.equal(f.api.sessionPhaseOf({ visible: true, enabled: false, status: 'stopped' }), 'stopped');
+  assert.equal(f.api.sessionPhaseOf({ visible: true, enabled: true, status: 'connecting' }), 'connecting');
+  assert.equal(f.api.sessionPhaseOf({ visible: false, enabled: true, status: 'ready' }), 'disabled');
+});
+
+test('a KEY=VALUE map keeps an own __proto__ entry', () => {
+  const f = fixture();
+  const parsed = f.api.parsePairs('__proto__=kept\nA=1', /^[A-Za-z_][A-Za-z0-9_]*$/, 'errLineKey', f.t);
+  assert.deepEqual(Object.keys(parsed.value).sort(), ['A', '__proto__']);
+  assert.equal(Object.getOwnPropertyDescriptor(parsed.value, '__proto__').value, 'kept');
+});
+
+test('a default-off server disables reconnect until a session shows it', () => {
+  const f = fixture();
+  const base = {
+    id: 'lazy-1', name: 'lazy', enabled: true, autoInject: false, transport: 'stdio',
+    command: 'node', args: [], tools: [], toolCount: 0, createdAt: 1,
+    onToggleExpand() {}, onToggleEnabled() {}, onReconnect() {}, onEdit() {}, onCopy() {},
+    onRequestDelete() {}, onCancelDelete() {}, onConfirmDelete() {}, onToolToggle() {},
+    registerDelete() {},
+  };
+  const off = f.mount(f.api.ServerRow, { t: f.t, ...base, server: { ...base, status: 'stopped' }, busy: false, expanded: false, confirming: false });
+  const control = elements(off.render()).find((node) => node.type === 'button' && node.props.title === f.t('reconnectOff', { name: 'lazy' }));
+  assert.notEqual(control, undefined, 'the control explains why it is unavailable');
+  assert.equal(control.props.disabled, true);
+
+  const on = f.mount(f.api.ServerRow, { t: f.t, ...base, server: { ...base, status: 'ready' }, busy: false, expanded: false, confirming: false });
+  assert.ok(elements(on.render()).some((node) => node.type === 'button' && node.props.title === f.t('reconnect', { name: 'lazy' })));
 });
 
 function elements(tree) {

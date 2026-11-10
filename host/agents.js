@@ -20,7 +20,9 @@ import { formatError } from './errors.js';
  * Create the per-agent tool registry.
  *
  * @param {object} dependencies - Registry dependencies.
- * @param {object} dependencies.runtime - Connection runtime exposing `definitionsOf` and `subscribe`.
+ * @param {object} dependencies.runtime - Connection runtime exposing `definitionsOf`, `subscribe` and the registration-status sinks.
+ * @param {(serverId: string, message: string) => void} [dependencies.runtime.registrationFailed] - records a failed registration on the server.
+ * @param {(serverId: string) => void} [dependencies.runtime.registrationRecovered] - clears a previous failure.
  * @param {object} dependencies.sessionState - Per-session override store.
  * @param {() => object[]} dependencies.listServers - Current persisted records.
  * @param {() => object[]} dependencies.listExternal - Current foreign entries, including namespace ownership.
@@ -174,13 +176,40 @@ export function createAgentRegistry({ runtime, sessionState, listServers, listEx
     for (const serverId of [...entry.registered.keys()]) releaseServer(entry, serverId);
   }
 
-  /** Register one server's current definitions on one agent. */
+  /**
+   * Names the Host catalog already exposes globally — the tools of foreign
+   * `dsh-mcp-client` entries. Scoped registrations are never part of it, which
+   * is why a managed server's public name can be checked against it.
+   *
+   * @returns {Set<string>} globally registered tool names.
+   */
+  function globalToolNames() {
+    let schemas;
+    try {
+      schemas = listToolSchemas();
+    } catch (error) {
+      warn(`could not read the tool catalog: ${formatError(error)}`);
+      return new Set();
+    }
+    const names = new Set();
+    for (const schema of Array.isArray(schemas) ? schemas : []) {
+      const name = schema !== null && typeof schema === 'object' ? schema.name : undefined;
+      if (typeof name === 'string' && name !== '') names.add(name);
+    }
+    return names;
+  }
+
+  /**
+   * Register one server's current definitions on one agent.
+   *
+   * @returns {string|undefined} failure message for the server's runtime state,
+   *   or undefined when the definitions are registered (or empty).
+   */
   function registerServer(entry, server, definitions, signature) {
-    if (definitions.length === 0) return true;
+    if (definitions.length === 0) return undefined;
     const tools = entry.agent?.ctx?.tools;
     if (tools === undefined || typeof tools.register !== 'function') {
-      warn(`agent scope for session "${entry.sessionId}" exposes no tool registry`);
-      return false;
+      return `the Agent scope for session "${entry.sessionId}" exposes no tool registry`;
     }
     const disposers = [];
     try {
@@ -193,31 +222,76 @@ export function createAgentRegistry({ runtime, sessionState, listServers, listEx
           /* best effort rollback */
         }
       }
-      warn(`could not register "${server.name}" tools for session "${entry.sessionId}": ${formatError(error)}`);
-      return false;
+      return `could not register "${server.name}" for session "${entry.sessionId}": ${formatError(error)}`;
     }
     entry.registered.set(server.id, { definitions, signature, disposers });
-    return true;
+    return undefined;
   }
 
-  /** Bring one agent's registrations in line with its Session's visibility. */
+  /**
+   * Bring one agent's registrations in line with its Session's visibility.
+   *
+   * Public names are allocated per server, so two servers can still collide on
+   * `mcp__<server>__<tool>` (server `a__b`/tool `c` vs server `a`/tool `b__c`).
+   * The claim map detects that before the registry is touched, so the losing
+   * server reports an error state instead of silently registering nothing.
+   */
   function syncEntry(entry) {
     syncExternal(entry);
     const wanted = new Map(visibleServers(entry.sessionId).map((server) => [server.id, server]));
     for (const serverId of [...entry.registered.keys()]) {
       if (!wanted.has(serverId)) releaseServer(entry, serverId);
     }
+    /** Names this agent already owns through managed registrations. */
+    const ownNames = new Set();
+    for (const registered of entry.registered.values()) {
+      for (const item of registered.definitions) ownNames.add(item.name);
+    }
+    /** @type {Map<string, string>} public name → server id owning it in this pass. */
+    const claimed = new Map();
+    /** @type {Set<string>|undefined} global catalog names, read at most once per sync. */
+    let global;
+    const claim = (server, definitions) => {
+      for (const item of definitions) claimed.set(item.name, server.id ?? server.name);
+    };
     for (const [serverId, server] of wanted) {
       const definitions = runtime.definitionsOf(serverId);
       // Include the complete declarative definition, not just its public name.
       // Reconnects release old registrations before installing new call closures.
       const signature = `${server.name}\u0000${definitions.map((item) => item.rawName).join('\u0000')}\u0000${runtime.revisionOf(serverId) ?? 0}\u0000${(server.disabledTools ?? []).join('\u0000')}`;
       const current = entry.registered.get(serverId);
-      if (current !== undefined && current.signature === signature) continue;
-      if (current !== undefined) releaseServer(entry, serverId);
-      if (!registerServer(entry, server, definitions, signature) && current !== undefined) {
-        registerServer(entry, server, current.definitions, current.signature);
+      if (current !== undefined && current.signature === signature) {
+        claim(server, current.definitions);
+        runtime.registrationRecovered?.(serverId);
+        continue;
       }
+      if (current !== undefined) releaseServer(entry, serverId);
+      if (definitions.length === 0) continue;
+      global ??= globalToolNames();
+      let failure;
+      for (const item of definitions) {
+        const owner = claimed.get(item.name);
+        if (owner !== undefined && owner !== serverId) {
+          failure = `tool "${item.name}" from "${server.name}" is already registered by server "${owner}"`;
+          break;
+        }
+        if (global.has(item.name) && !ownNames.has(item.name)) {
+          failure = `tool "${item.name}" from "${server.name}" is already registered by a dsh-mcp-client entry; disable it or migrate it here`;
+          break;
+        }
+      }
+      failure ??= registerServer(entry, server, definitions, signature);
+      if (failure === undefined) {
+        claim(server, definitions);
+        runtime.registrationRecovered?.(serverId);
+        continue;
+      }
+      // A failed replacement keeps the previous registration executable, so a
+      // bad schema refresh never leaves the Agent without the working tools.
+      if (current !== undefined && registerServer(entry, server, current.definitions, current.signature) === undefined) {
+        claim(server, current.definitions);
+      }
+      runtime.registrationFailed?.(serverId, failure);
     }
   }
 
@@ -297,11 +371,6 @@ export function createAgentRegistry({ runtime, sessionState, listServers, listEx
     }
   }
 
-  /** @returns {number} number of attached agents (diagnostics). */
-  function size() {
-    return entries.size;
-  }
-
   // `register`, `dispose` and `restrict` each notify; one action must not walk
   // every agent once per notification.
   let scheduled = false;
@@ -320,15 +389,12 @@ export function createAgentRegistry({ runtime, sessionState, listServers, listEx
     attach,
     detach,
     syncAll,
-    scheduleSync,
     refreshExternal,
     syncSession,
     sessionEnabledServerIds,
-    visibleServers,
     dispose: () => {
       if (typeof unsubscribe === 'function') unsubscribe();
       disposeAll();
     },
-    size,
   };
 }

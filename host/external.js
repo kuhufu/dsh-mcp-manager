@@ -101,10 +101,21 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
     if (required) throw new ManagerError('unsupported', 'the Loader is not available in this deployment');
   }
 
+  /** Loader rows as an array, tolerating a service that throws while listing. */
+  function loaderEntries(loader) {
+    try {
+      const rows = loader.entries();
+      return Array.isArray(rows) ? rows : [...rows];
+    } catch (error) {
+      warn(`could not list Loader entries: ${error?.message ?? String(error)}`);
+      return [];
+    }
+  }
+
   /** Find one Loader row, tolerating missing optional services during polling. */
   function findEntry(entryId, required = false) {
     const loader = resolveLoader(required);
-    return loader && [...loader.entries()].find((entry) => entry?.id === entryId);
+    return loader ? loaderEntries(loader).find((entry) => entry?.id === entryId) : undefined;
   }
 
   /** Require the selected row to be an MCP client before changing it. */
@@ -185,7 +196,7 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
     const counts = catalogCounts();
     const managed = managedNames();
     const rows = [];
-    for (const entry of loader.entries()) {
+    for (const entry of loaderEntries(loader)) {
       const options = entry === null || entry === undefined ? undefined : entry.options;
       if (options === undefined || options === null || options.name !== '@deepseek-ai/dsh-mcp-client') continue;
       const config = options.config !== null && typeof options.config === 'object' ? options.config : {};
@@ -313,6 +324,12 @@ export function createExternalOperations({ ctx, store, warn, enqueue, list, reco
           throw new ManagerError('internal', `repaired the profile patch for "${entryId}", but the Loader did not apply the new state; restart the app to pick it up`);
         }
         return { servers: list(), repaired: true };
+      }
+      // `changed: false` means the row already had the requested state; older
+      // managers report it without an `application`, which must not read as a
+      // failure of an idempotent toggle.
+      if (change !== null && change !== undefined && change.changed === false) {
+        return { servers: list() };
       }
       if (application !== 'applied') {
         throw new ManagerError('internal', `entry "${entryId}" could not be ${payload.enabled ? 'enabled' : 'disabled'} live (${String(application)}); restart the app and retry`);

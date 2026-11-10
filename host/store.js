@@ -25,31 +25,33 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { writeFileAtomic } from './atomic-file.js';
+
 /** Persisted document version. */
-export const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 1;
 
 /** Relative path of the storage document below `DSH_HOME`. */
-export const STORAGE_RELATIVE_PATH = path.join('storages', 'mcp-manager.json');
+const STORAGE_RELATIVE_PATH = path.join('storages', 'mcp-manager.json');
 
 /**
  * Persisted page-level preference: whether this bundle also installs a
  * left-rail entry for the same page. The Settings page always exists; only the
  * rail surface follows this flag.
  */
-export const DEFAULT_UI = Object.freeze({ railEntry: true });
+const DEFAULT_UI = Object.freeze({ railEntry: true });
 
 /** Tool-namespace rule for one MCP server: `^[A-Za-z0-9_-]{1,32}$`. */
-export const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** Environment variable name rule for stdio servers. */
-export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** HTTP header name rule (RFC 9110 token, deliberately permissive). */
-export const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 /** Authoritative connection option ranges; the browser mirrors these without Host imports. */
 export const CONNECTION_OPTIONS = Object.freeze({
@@ -58,27 +60,10 @@ export const CONNECTION_OPTIONS = Object.freeze({
   retryCount: Object.freeze({ min: 0, max: 10, default: 0 }),
 });
 
-/**
- * Every machine-readable failure code the Host can put on the wire.
- *
- * `invalid`/`duplicate-name`/`not-found`/`internal` originate here;
- * `overridden` and `unsupported` come from the Loader/profile layer
- * (`host/profile-patch.js` and `index.js`) when a row cannot be switched.
- */
-export const ERROR_CODES = Object.freeze([
-  'invalid',
-  'duplicate-name',
-  'not-found',
-  'overridden',
-  'unsupported',
-  'internal',
-  'storage-readonly',
-]);
-
 /** Failure carrying a stable wire code, a human message and an optional field. */
 export class ManagerError extends Error {
   /**
-   * @param {'invalid'|'duplicate-name'|'not-found'|'overridden'|'unsupported'|'storage-readonly'|'internal'} code - stable wire code.
+   * @param {'invalid'|'duplicate-name'|'not-found'|'overridden'|'unsupported'|'conflict'|'storage-readonly'|'internal'} code - stable wire code.
    * @param {string} message - human-readable explanation shown by the Client.
    * @param {string} [field] - offending request field, when there is one.
    */
@@ -106,7 +91,7 @@ export function isRecord(value) {
  * @param {(message: string) => void} [warn] - diagnostics sink for malformed values.
  * @returns {{ railEntry: boolean }} resolved preference.
  */
-export function coerceUi(value, warn) {
+function coerceUi(value, warn) {
   if (isRecord(value) && typeof value.railEntry === 'boolean') return { railEntry: value.railEntry };
   if (value !== undefined) warn?.('ignoring ui: "railEntry" must be a boolean, using the default (true)');
   return { railEntry: DEFAULT_UI.railEntry };
@@ -144,6 +129,23 @@ export function resolveDshHome(env = process.env) {
  */
 export function resolveStoragePath(env = process.env) {
   return path.join(resolveDshHome(env), STORAGE_RELATIVE_PATH);
+}
+
+/**
+ * Whether a value is an absolute http(s) URL — the Host's rule for
+ * `transport: "http"`.
+ *
+ * @param {unknown} value - candidate endpoint.
+ * @returns {boolean} true for an absolute `http:`/`https:` URL.
+ */
+export function isHttpUrl(value) {
+  if (typeof value !== 'string' || value.trim() === '') return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -196,15 +198,7 @@ export function validateServerInput(input, context = {}) {
     if (cwd !== undefined) normalized.cwd = cwd;
   } else {
     const rawUrl = typeof input.url === 'string' ? input.url.trim() : '';
-    let parsed;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      throw new ManagerError('invalid', 'url must be an absolute http(s) URL', 'url');
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new ManagerError('invalid', 'url must be an absolute http(s) URL', 'url');
-    }
+    if (!isHttpUrl(rawUrl)) throw new ManagerError('invalid', 'url must be an absolute http(s) URL', 'url');
     normalized.url = rawUrl;
     normalized.headers = normalizeStringMap(input.headers, 'headers', HEADER_NAME_PATTERN);
   }
@@ -248,6 +242,18 @@ function normalizeStringList(value, field) {
 }
 
 /**
+ * Define one own enumerable property, even for keys such as `__proto__` that a
+ * plain assignment would route through the prototype setter and silently drop.
+ * @param {Record<string, string>} target - destination object.
+ * @param {string} key - property name.
+ * @param {string} value - property value.
+ * @returns {void}
+ */
+export function setOwn(target, key, value) {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/**
  * Validate an env/header map: string keys, string values, keys matching the
  * field-specific pattern.
  * @param {unknown} value - untrusted value.
@@ -267,7 +273,7 @@ function normalizeStringMap(value, field, keyPattern) {
     if (typeof entry !== 'string') {
       throw new ManagerError('invalid', `${field}.${key} must be a string`, field);
     }
-    out[key] = entry;
+    setOwn(out, key, entry);
   }
   return out;
 }
@@ -294,7 +300,7 @@ function normalizeOptionalString(value, field) {
  *   previously accepted records (for the uniqueness check).
  * @returns {object|undefined} normalized server, or undefined when invalid.
  */
-export function coerceStoredServer(value, context = {}) {
+function coerceStoredServer(value, context = {}) {
   if (!isRecord(value)) return undefined;
   const id = typeof value.id === 'string' && value.id.trim() !== '' ? value.id : undefined;
   const createdAt = typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : undefined;
@@ -432,7 +438,6 @@ export function createStore(options = {}) {
   let loaded = false;
   /** Serializes every write (and therefore every document snapshot rename). */
   let writeChain = Promise.resolve();
-  let tempSequence = 0;
 
   const warn = (message) => {
     if (logger !== undefined && typeof logger.warn === 'function') logger.warn(`mcp-manager: ${message}`);
@@ -441,6 +446,15 @@ export function createStore(options = {}) {
   let storageError;
   let skippedRecords = 0;
   let hasBackup = false;
+  /**
+   * Exact bytes this store last read from, or successfully wrote to, the
+   * document. A write whose re-read differs is a concurrent modification by
+   * another process: silently replacing it would drop that process's records.
+   * `baselineKnown` stays false when the load failed, and writes are already
+   * blocked by `storageError` in that case.
+   */
+  let baseline = '';
+  let baselineKnown = false;
   const backupFile = `${file}.bak`;
 
   function parseDocument(raw, report = false) {
@@ -469,11 +483,17 @@ export function createStore(options = {}) {
     if (loaded) return Promise.resolve(list());
     loading ??= (async () => {
       try {
-        const document = parseDocument(await readFile(file, 'utf8'), true);
+        const raw = await readFile(file, 'utf8');
+        const document = parseDocument(raw, true);
         commit(document.servers, document.ui);
         skippedRecords = document.skipped;
+        baseline = raw;
+        baselineKnown = true;
       } catch (error) {
-        if (error?.code !== 'ENOENT') {
+        if (error?.code === 'ENOENT') {
+          baseline = '';
+          baselineKnown = true;
+        } else {
           storageError = `Could not load configuration: ${error?.message ?? String(error)}`;
           warn(storageError);
         }
@@ -545,19 +565,6 @@ export function createStore(options = {}) {
       ...(skippedRecords ? { skippedRecords } : {}), ...(storageError ? { error: storageError } : {}) };
   }
 
-  async function atomicWrite(target, payload) {
-    await mkdir(path.dirname(target), { recursive: true });
-    const temporary = `${target}.tmp-${process.pid}-${tempSequence += 1}-${randomUUID()}`;
-    try {
-      const handle = await open(temporary, 'wx', 0o600);
-      try {
-        await handle.writeFile(payload, 'utf8');
-        await handle.sync();
-      } finally { await handle.close(); }
-      await rename(temporary, target);
-    } finally { await rm(temporary, { force: true }); }
-  }
-
   async function persist(nextServers, nextUi, recovering = false) {
     if (storageError && !recovering) throw new ManagerError('storage-readonly', storageError);
     const payload = JSON.stringify({ version: STORAGE_VERSION, servers: nextServers, ui: nextUi }, null, 2) + '\n';
@@ -566,6 +573,25 @@ export function createStore(options = {}) {
         let previous;
         try { previous = await readFile(file, 'utf8'); }
         catch (error) { if (error?.code !== 'ENOENT') throw error; }
+        // Another process replaced, removed or created the document since this
+        // store last read or wrote it. Follow the on-disk state and refuse this
+        // write instead of dropping the other writer's records.
+        if (baselineKnown && (previous ?? '') !== baseline) {
+          let parsed;
+          if (previous === undefined) {
+            parsed = { servers: [], ui: { railEntry: DEFAULT_UI.railEntry }, skipped: 0 };
+          } else {
+            try { parsed = parseDocument(previous); }
+            catch {
+              storageError = 'Configuration changed or became unreadable: the document was replaced by another process';
+              throw new ManagerError('storage-readonly', storageError);
+            }
+          }
+          commit(parsed.servers, parsed.ui);
+          skippedRecords = parsed.skipped;
+          baseline = previous ?? '';
+          throw new ManagerError('conflict', `${file} was changed by another process; the stored configuration was reloaded, retry the change`);
+        }
         if (previous !== undefined) {
           // Never replace an externally damaged document with a stale memory snapshot.
           let parsed;
@@ -575,19 +601,21 @@ export function createStore(options = {}) {
             throw new ManagerError('storage-readonly', storageError);
           }
           if (parsed.skipped) {
-            await atomicWrite(`${file}.recovery-${Date.now()}-${randomUUID()}`, previous);
+            await writeFileAtomic(`${file}.recovery-${Date.now()}-${randomUUID()}`, previous);
           }
-          await atomicWrite(backupFile, previous);
+          await writeFileAtomic(backupFile, previous);
           hasBackup = true;
         }
       }
-      await atomicWrite(file, payload);
+      await writeFileAtomic(file, payload);
     } catch (error) {
       if (error instanceof ManagerError) throw error;
       throw new ManagerError('internal', `could not persist MCP servers: ${error?.message ?? String(error)}`);
     }
     // Commit the in-memory state only after rename succeeds.
     commit(clone(nextServers), clone(nextUi));
+    baseline = payload;
+    baselineKnown = true;
     storageError = undefined;
     skippedRecords = 0;
   }
@@ -637,7 +665,6 @@ export function createStore(options = {}) {
   }
 
   return {
-    file,
     status,
     recover,
     load,

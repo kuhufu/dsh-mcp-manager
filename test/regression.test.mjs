@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
 import { createStore, validateServerInput } from '../host/store.js';
-import { connect, createHttpTransport, createRpcConnection } from '../host/mcp.js';
+import { connect, createHttpTransport, createRpcConnection, MAX_TOOL_COUNT, MAX_TOOL_SCHEMA_BYTES } from '../host/mcp.js';
 import { createMcpManager } from '../host/manager.js';
 import { createFetchRoutes } from '../host/routes.js';
 import { createSessionState } from '../host/session-state.js';
@@ -38,6 +38,21 @@ async function http(t, handler) {
 function reply(res, id, result) {
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+}
+/**
+ * Serve one MCP Streamable-HTTP endpoint that advertises a fixed tool list.
+ * @param {object} t - node:test context, for automatic teardown.
+ * @param {object[]|(() => object[])} tools - advertised catalog, or its producer.
+ * @returns {Promise<string>} endpoint URL.
+ */
+function mcpHttp(t, tools) {
+  return http(t, (req, res, body) => {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+    if (body.method === 'initialize') return reply(res, body.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} } });
+    if (body.method === 'notifications/initialized') { res.writeHead(202); return res.end(); }
+    if (body.method === 'tools/list') return reply(res, body.id, { tools: typeof tools === 'function' ? tools() : tools });
+    return reply(res, body.id, { content: [] });
+  });
 }
 
 test('failed writes leave memory, UI and subsequent snapshots unchanged', async (t) => {
@@ -909,4 +924,114 @@ test('a patch without a top-level array is reported and left untouched', async (
   assert.match(report.problems[0], /not a top-level YAML array/);
   assert.equal(await readFile(homePatch, 'utf8'), broken, 'the damaged home patch is not rewritten');
   assert.equal(await readFile(profilePatch, 'utf8'), profile, 'the profile is not rewritten');
+});
+
+test('a concurrent writer is never silently overwritten', async (t) => {
+  const dir = await temporary(t), file = path.join(dir, 'config.json');
+  const first = createStore({ file });
+  const second = createStore({ file });
+  await first.load(); await second.load();
+  await first.setServers([record('alpha')]);
+  await assert.rejects(second.setServers([record('beta')]), (error) => error.code === 'conflict');
+  assert.deepEqual(second.list().map((server) => server.name), ['alpha'], 'memory follows the document that won');
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).servers.map((server) => server.name), ['alpha']);
+  await second.setServers([record('beta')]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).servers.map((server) => server.name), ['beta'], 'the retry wins');
+});
+
+test('cross-server public-name collisions surface as an error state instead of losing tools', async (t) => {
+  const { manager, tools } = await managerFixture(t);
+  const left = await mcpHttp(t, [{ name: 'b__c' }]);
+  const right = await mcpHttp(t, [{ name: 'c' }]);
+  await manager.save({ server: { name: 'a', transport: 'http', url: left } });
+  await manager.save({ server: { name: 'a__b', transport: 'http', url: right } });
+  await until(() => manager.list().every((server) => server.status === 'ready' || server.status === 'error'));
+  const rows = manager.list();
+  const failed = rows.find((server) => server.status === 'error');
+  assert.ok(failed, JSON.stringify(rows.map((row) => [row.name, row.status])));
+  assert.match(failed.error, /already registered/);
+  assert.equal(rows.filter((row) => row.status === 'ready').length, 1, 'only the first server keeps the namespace');
+  assert.equal(tools.size, 1, 'exactly one registration owns the shared public name');
+
+  // Removing the winner lets the loser register on the next reconcile.
+  await manager.remove({ id: rows.find((row) => row.status === 'ready').id });
+  await until(() => manager.list().every((row) => row.status === 'ready'));
+  assert.equal(tools.size, 1);
+});
+
+test('reconnect refuses a server nothing asked to connect', async (t) => {
+  const { manager } = await managerFixture(t);
+  const { id } = await manager.save({ server: { name: 'lazy', transport: 'stdio', command: process.execPath, args: [path.join(import.meta.dirname, 'fake-server.mjs')], autoInject: false } });
+  await assert.rejects(manager.reconnect({ id }), (error) => error.code === 'invalid' && /not injected by default/.test(error.message));
+  await manager.toggle({ id, enabled: false });
+  await assert.rejects(manager.reconnect({ id }), (error) => error.code === 'invalid' && /is disabled/.test(error.message));
+});
+
+test('the handshake deadline bounds tools/list, not just initialize', async (t) => {
+  const { manager } = await managerFixture(t);
+  const url = await http(t, (req, res, body) => {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+    if (body.method === 'initialize') return reply(res, body.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} } });
+    if (body.method === 'notifications/initialized') { res.writeHead(202); return res.end(); }
+    // `tools/list` is never answered: the handshake must give up on its own
+    // deadline instead of waiting for the (much larger) tool timeout.
+  });
+  const started = Date.now();
+  await manager.save({ server: { name: 'stalled', transport: 'http', url, initializeTimeoutMs: 1000 } });
+  await until(() => manager.list()[0].status === 'error', 5000);
+  assert.match(manager.list()[0].error, /tools\/list timed out|handshake/);
+  assert.ok(Date.now() - started < 4000, 'bounded by the handshake deadline, not the tool timeout');
+});
+
+test('a tool catalog above the cap fails the handshake with a visible error', async (t) => {
+  const { manager } = await managerFixture(t);
+  const tools = Array.from({ length: MAX_TOOL_COUNT + 1 }, (_, index) => ({ name: `tool-${index}` }));
+  const url = await mcpHttp(t, tools);
+  await manager.save({ server: { name: 'huge', transport: 'http', url } });
+  await until(() => manager.list()[0].status === 'error');
+  assert.match(manager.list()[0].error, new RegExp(`more than ${MAX_TOOL_COUNT} tools`));
+  assert.equal(manager.list()[0].tools.length, 0);
+});
+
+test('an oversized input schema is dropped and reported instead of retained', async (t) => {
+  const { manager, tools } = await managerFixture(t);
+  const url = await mcpHttp(t, [{
+    name: 'wide',
+    inputSchema: { type: 'object', properties: { blob: { const: 'x'.repeat(MAX_TOOL_SCHEMA_BYTES + 16) } } },
+  }]);
+  await manager.save({ server: { name: 'wide', transport: 'http', url } });
+  await until(() => manager.list()[0].status === 'ready' && manager.list()[0].tools.length === 1);
+  assert.deepEqual(tools.get('mcp__wide__wide').parameters, { type: 'object', properties: {} });
+  assert.ok(manager.list()[0].logs.some((entry) => /input schema of tool "wide"/.test(entry.message)));
+});
+
+test('an env key named __proto__ is kept as a real variable', async (t) => {
+  const { manager, dir } = await managerFixture(t);
+  await manager.save({ server: { name: 'proto', transport: 'stdio', command: 'node', enabled: false, env: JSON.parse('{"__proto__":"kept","A":"1"}') } });
+  const row = manager.list()[0];
+  assert.deepEqual(Object.keys(row.env).sort(), ['A', '__proto__']);
+  assert.equal(Object.getOwnPropertyDescriptor(row.env, '__proto__').value, 'kept');
+  const document = JSON.parse(await readFile(path.join(dir, 'storages', 'mcp-manager.json'), 'utf8'));
+  assert.deepEqual(Object.keys(document.servers[0].env).sort(), ['A', '__proto__']);
+  assert.equal(document.servers[0].env['__proto__'], 'kept');
+});
+
+test('agents that exist before the plugin loads still receive MCP tools', async (t) => {
+  const dir = await temporary(t), previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dir;
+  const tools = new Map();
+  const registry = {
+    register(definition) { tools.set(definition.name, definition); return () => tools.delete(definition.name); },
+    schemas: () => [...tools.values()],
+  };
+  const liveAgent = { id: 'live-agent', session: { id: 'live-session' }, ctx: { tools: registry, effect: (body) => body() } };
+  const manager = createMcpManager({ ctx: { tools: registry, get: (name) => (name === 'agents' ? { list: () => [liveAgent] } : undefined) } });
+  t.after(async () => {
+    await manager.dispose();
+    if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous;
+  });
+  await manager.boot();
+  await manager.save({ server: { name: 'preloaded', transport: 'stdio', command: process.execPath, args: [path.join(import.meta.dirname, 'fake-server.mjs')] } });
+  await until(() => tools.size > 0);
+  assert.ok([...tools.keys()].every((name) => name.startsWith('mcp__preloaded__')));
 });

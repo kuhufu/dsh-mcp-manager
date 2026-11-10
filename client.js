@@ -128,7 +128,6 @@ window.__ModuleLoader__.load({
         'Connect Model Context Protocol servers so their tools become available to the agent. Changes take effect immediately.',
       add: 'Add server',
       refresh: 'Refresh status',
-      refreshing: 'Refreshing…',
       loading: 'Loading servers…',
       emptyTitle: 'No MCP servers yet',
       emptyHint: 'Add a local command or an HTTP endpoint to expose its tools to the agent.',
@@ -168,6 +167,7 @@ window.__ModuleLoader__.load({
       enable: 'Enable {name}',
       disable: 'Disable {name}',
       reconnect: 'Reconnect {name}',
+      reconnectOff: 'Enable {name} for a session from /mcp before reconnecting',
       edit: 'Edit {name}',
       remove: 'Delete {name}',
       cancel: 'Cancel',
@@ -214,6 +214,9 @@ window.__ModuleLoader__.load({
       errOverridden:
         'This row is declared more than once in the profile patch, so the profile layer cannot change it. Remove the duplicate entry, or move the disabled row after its insert.',
       errNetwork: 'Could not reach the host service.',
+      errConflict:
+        'Another process changed the saved configuration. The page followed the stored state — retry the change.',
+      errHttp: 'The host returned HTTP {status}.',
       errInternal: 'The host reported an error.',
       errLoad: 'Could not load the server list.',
       railLabel: 'Show in the sidebar',
@@ -306,7 +309,6 @@ window.__ModuleLoader__.load({
       intro: '连接 Model Context Protocol 服务器，把它们的工具提供给智能体使用。改动立即生效。',
       add: '添加服务器',
       refresh: '刷新状态',
-      refreshing: '刷新中…',
       loading: '正在加载服务器…',
       emptyTitle: '还没有配置 MCP 服务器',
       emptyHint: '添加本地命令或 HTTP 端点，即可把它的工具交给智能体使用。',
@@ -345,6 +347,7 @@ window.__ModuleLoader__.load({
       enable: '启用 {name}',
       disable: '停用 {name}',
       reconnect: '重新连接 {name}',
+      reconnectOff: '请先在 /mcp 中为本会话启用 {name}，再重新连接',
       edit: '编辑 {name}',
       remove: '删除 {name}',
       cancel: '取消',
@@ -391,6 +394,8 @@ window.__ModuleLoader__.load({
       errLineKey: '第 {line} 行：名称只能包含字母、数字和下划线。',
       errLineHeader: '第 {line} 行：请求头名称不能包含空格或分隔符。',
       errNetwork: '无法连接宿主服务。',
+      errConflict: '另一个进程修改了已保存的配置。页面已同步到磁盘上的状态，请重试本次修改。',
+      errHttp: '宿主返回了 HTTP {status}。',
       errInternal: '宿主返回了错误。',
       errLoad: '无法读取服务器列表。',
       railLabel: '在左侧栏显示入口',
@@ -413,15 +418,17 @@ window.__ModuleLoader__.load({
     /** A route failure in the Host's documented error shape, or a transport failure. */
     class ApiError extends Error {
       /**
-       * @param code - `invalid`/`duplicate-name`/`not-found`/`internal`, or `network`.
+       * @param code - a stable Host failure code, `network`, `http`, or `internal`.
        * @param message - Host-authored detail when available.
        * @param field - form field the Host blames, when it names one.
+       * @param status - HTTP status for the `http` fallback.
        */
-      constructor(code, message, field) {
+      constructor(code, message, field, status) {
         super(message);
         this.name = 'ApiError';
         this.code = code;
         this.field = field;
+        this.status = status;
       }
     }
 
@@ -455,7 +462,7 @@ window.__ModuleLoader__.load({
       if (payload && payload.ok === true) return payload;
       const failure = payload && payload.error;
       if (failure) throw new ApiError(failure.code || 'internal', failure.message || '', failure.field);
-      throw new ApiError('internal', 'HTTP ' + response.status);
+      throw new ApiError('http', '', undefined, response.status);
     }
 
     /**
@@ -468,6 +475,8 @@ window.__ModuleLoader__.load({
       if (error instanceof ApiError) {
         if (error.code === 'network') return t('errNetwork');
         if (error.code === 'overridden') return t('errOverridden');
+        if (error.code === 'conflict') return t('errConflict');
+        if (error.code === 'http') return t('errHttp', { status: error.status ?? '' });
         if (error.message) return error.message;
         return t('errInternal');
       }
@@ -519,6 +528,21 @@ window.__ModuleLoader__.load({
       disabled: 'idle',
     };
 
+    /**
+     * Phase shown by the `/mcp` surfaces. A server this Session shows is not
+     * "disabled" even when the deployment-wide switch is off: it is connected
+     * for this Session, which is what the panel is about.
+     * @param server - one `SessionServerView` row.
+     * @returns the phase key used by the dot and its voice.
+     */
+    function sessionPhaseOf(server) {
+      if (server.visible !== true) return 'disabled';
+      if (server.status === 'ready') return 'ready';
+      if (server.status === 'connecting' || server.status === 'starting') return 'connecting';
+      if (server.status === 'error') return 'error';
+      return 'stopped';
+    }
+
     /** Translation key of a phase's voice. */
     const PHASE_KEY = {
       ready: 'statusReady',
@@ -548,6 +572,19 @@ window.__ModuleLoader__.load({
       } catch (error) {
         return false;
       }
+    }
+
+    /**
+     * Define one own enumerable property, even for keys such as `__proto__` that
+     * a plain assignment would route through the prototype setter and drop.
+     * @param target - destination object.
+     * @param key - property name.
+     * @param value - property value.
+     * @returns the same object.
+     */
+    function setOwn(target, key, value) {
+      Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+      return target;
     }
 
     /** Split a textarea into lines, dropping blank lines and trailing carriage returns. */
@@ -587,7 +624,7 @@ window.__ModuleLoader__.load({
         const value = line.slice(at + 1);
         if (key === '') return { error: t('errLineFormat', { line: index + 1 }) };
         if (!keyPattern.test(key)) return { error: t(keyError, { line: index + 1 }) };
-        record[key] = value;
+        setOwn(record, key, value);
       }
       return { value: Object.keys(record).length > 0 ? record : undefined };
     }
@@ -700,6 +737,80 @@ window.__ModuleLoader__.load({
         'M6 6.5h.01M6 17.5h.01',
       ],
     };
+
+    /**
+     * A ref that reports whether the component is still mounted, for callbacks
+     * that settle after its surface moved on.
+     * @returns {{ current: boolean }} liveness ref.
+     */
+    function useMountedRef() {
+      const alive = React.useRef(true);
+      React.useEffect(() => {
+        alive.current = true;
+        return () => {
+          alive.current = false;
+        };
+      }, []);
+      return alive;
+    }
+
+    /**
+     * Modal behavior shared by the add/edit and import dialogs: focus moves to
+     * the first field, Tab stays inside the dialog, Escape closes it, and focus
+     * returns to the control that opened it.
+     * @param onClose - close callback (the latest render's is always used).
+     * @param initialFocus - ref of the control to focus on mount.
+     * @returns the dialog root ref and its key handler.
+     */
+    function useDialogModal(onClose, initialFocus) {
+      const dialogRef = React.useRef(null);
+      const closeRef = React.useRef(onClose);
+      closeRef.current = onClose;
+      React.useEffect(() => {
+        const opener = typeof document !== 'undefined' ? document.activeElement : null;
+        const first = initialFocus?.current;
+        if (first) first.focus();
+        return () => {
+          if (opener && typeof opener.focus === 'function') {
+            try {
+              opener.focus();
+            } catch (error) {
+              /* the opener may be gone; nothing to restore */
+            }
+          }
+        };
+      }, []);
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          closeRef.current();
+          return;
+        }
+        if (event.key !== 'Tab') return;
+        const root = dialogRef.current;
+        if (!root) return;
+        const selectable = root.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        const nodes = [];
+        for (let index = 0; index < selectable.length; index += 1) {
+          const node = selectable[index];
+          if (node.offsetParent !== null || node === document.activeElement) nodes.push(node);
+        }
+        if (nodes.length === 0) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+      return { dialogRef, onKeyDown };
+    }
 
     /** One inline icon; decorative unless the caller names it. */
     function Icon(props) {
@@ -1044,7 +1155,7 @@ window.__ModuleLoader__.load({
                         disabled: busy || confirming,
                         onClick: () => setConfirmId(item.entryId),
                       },
-                      t('takeover'),
+                      t(busy ? 'takeoverBusy' : 'takeover'),
                     ),
                     ),
                   ),
@@ -1061,27 +1172,6 @@ window.__ModuleLoader__.load({
                       : t(item.enabled !== false ? 'disable' : 'enable', { name }),
                     onChange: () => props.onToggle(item),
                   }),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dshmcp-btn dshmcp-btn-small',
-                      style: { display: 'none' },
-                      disabled: busy || confirming,
-                      'aria-busy': busy ? 'true' : undefined,
-                      onClick: () => setConfirmId(item.entryId),
-                    },
-                    h(
-                      'span',
-                      { className: 'dshmcp-btn-stack' },
-                      h('span', null, busy ? t('takeoverBusy') : t('takeover')),
-                      h(
-                        'span',
-                        { className: 'dshmcp-btn-ghost', 'aria-hidden': 'true' },
-                        busy ? t('takeover') : t('takeoverBusy'),
-                      ),
-                    ),
-                  ),
                 ),
               ),
               confirming
@@ -1272,6 +1362,10 @@ window.__ModuleLoader__.load({
       const summary = transportSummary(server);
       const toolCount = typeof server.toolCount === 'number' ? server.toolCount : (server.tools || []).length;
       const detailsId = 'dshmcp-details-' + server.id;
+      // A default-off server only connects while a Session shows it; a manual
+      // reconnect with nothing demanding it would be a no-op, so the control
+      // stays disabled until /mcp (or the default switch) asks for it.
+      const reconnectable = !(server.enabled !== false && server.autoInject === false && (server.status === undefined || server.status === 'stopped'));
       const version =
         server.serverInfo && server.serverInfo.version
           ? t('versionShort', { version: server.serverInfo.version })
@@ -1339,9 +1433,9 @@ window.__ModuleLoader__.load({
               {
                 type: 'button',
                 className: 'dshmcp-icon-btn',
-                'aria-label': t('reconnect', { name: server.name }),
-                title: t('reconnect', { name: server.name }),
-                disabled: busyHere || !server.enabled || server.status === 'connecting',
+                'aria-label': reconnectable ? t('reconnect', { name: server.name }) : t('reconnectOff', { name: server.name }),
+                title: reconnectable ? t('reconnect', { name: server.name }) : t('reconnectOff', { name: server.name }),
+                disabled: busyHere || !server.enabled || server.status === 'connecting' || !reconnectable,
                 onClick: props.onReconnect,
               },
               h(Icon, { name: 'link' }),
@@ -1409,8 +1503,6 @@ window.__ModuleLoader__.load({
       const editing = props.mode === 'edit';
       const uid = React.useId().replace(/[^A-Za-z0-9_-]/g, '');
       const id = (name) => 'dshmcp-' + name + '-' + uid;
-      const dialogRef = React.useRef(null);
-      const openerRef = React.useRef(null);
       const fieldRefs = {
         name: React.useRef(null),
         command: React.useRef(null),
@@ -1423,34 +1515,12 @@ window.__ModuleLoader__.load({
         initializeTimeoutMs: React.useRef(null),
         retryCount: React.useRef(null),
       };
-      const aliveRef = React.useRef(true);
+      const aliveRef = useMountedRef();
+      const { dialogRef, onKeyDown } = useDialogModal(props.onClose, fieldRefs.name);
       const [draft, setDraft] = React.useState(() => draftOf(props.server));
       const [errors, setErrors] = React.useState({});
       const [failure, setFailure] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
-
-      React.useEffect(() => {
-        aliveRef.current = true;
-        return () => {
-          aliveRef.current = false;
-        };
-      }, []);
-
-      // Focus the first field, and hand focus back to the opener on close.
-      React.useEffect(() => {
-        openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
-        if (fieldRefs.name.current) fieldRefs.name.current.focus();
-        const opener = openerRef.current;
-        return () => {
-          if (opener && typeof opener.focus === 'function') {
-            try {
-              opener.focus();
-            } catch (error) {
-              /* the opener may be gone; nothing to restore */
-            }
-          }
-        };
-      }, []);
 
       const edit = (key) => (event) => {
         const value = event.target.value;
@@ -1495,37 +1565,6 @@ window.__ModuleLoader__.load({
           }
         } finally {
           if (aliveRef.current) setSaving(false);
-        }
-      };
-
-      /** Keep Tab inside the dialog and let Escape close it. */
-      const onKeyDown = (event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          props.onClose();
-          return;
-        }
-        if (event.key !== 'Tab') return;
-        const root = dialogRef.current;
-        if (!root) return;
-        const selectable = root.querySelectorAll(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-        const nodes = [];
-        for (let index = 0; index < selectable.length; index += 1) {
-          const node = selectable[index];
-          if (node.offsetParent !== null || node === document.activeElement) nodes.push(node);
-        }
-        if (nodes.length === 0) return;
-        const first = nodes[0];
-        const last = nodes[nodes.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
         }
       };
 
@@ -1962,9 +2001,10 @@ window.__ModuleLoader__.load({
     /**
      * Read the list once. A newer read supersedes the previous one, and a
      * response that loses to a mutation or to another read is dropped.
+     * @param force - read even while a mutation is in flight (a manual refresh).
      */
-    function readData() {
-      if (pendingWrites > 0) return;
+    function readData(force = false) {
+      if (!force && pendingWrites > 0) return;
       activeRead?.abort();
       const controller = new AbortController();
       activeRead = controller;
@@ -2424,39 +2464,15 @@ window.__ModuleLoader__.load({
       const t = props.t;
       const uid = React.useId().replace(/[^A-Za-z0-9_-]/g, '');
       const id = (name) => 'dshmcp-import-' + name + '-' + uid;
-      const dialogRef = React.useRef(null);
       const textRef = React.useRef(null);
       const doneRef = React.useRef(null);
-      const openerRef = React.useRef(null);
-      const aliveRef = React.useRef(true);
+      const aliveRef = useMountedRef();
+      const { dialogRef, onKeyDown } = useDialogModal(props.onClose, textRef);
       const [text, setText] = React.useState('');
       const [enable, setEnable] = React.useState(true);
       const [busy, setBusy] = React.useState(false);
       const [failure, setFailure] = React.useState(null);
       const [result, setResult] = React.useState(null);
-
-      React.useEffect(() => {
-        aliveRef.current = true;
-        return () => {
-          aliveRef.current = false;
-        };
-      }, []);
-
-      // Focus the paste box, and hand focus back to the opener on close.
-      React.useEffect(() => {
-        openerRef.current = typeof document !== 'undefined' ? document.activeElement : null;
-        if (textRef.current) textRef.current.focus();
-        const opener = openerRef.current;
-        return () => {
-          if (opener && typeof opener.focus === 'function') {
-            try {
-              opener.focus();
-            } catch (error) {
-              /* the opener may be gone; nothing to restore */
-            }
-          }
-        };
-      }, []);
 
       const parsed = parseConfigText(text);
       const preview = parsed === undefined ? [] : previewEntries(parsed);
@@ -2482,37 +2498,6 @@ window.__ModuleLoader__.load({
           if (aliveRef.current) setFailure(explain(error, t));
         } finally {
           if (aliveRef.current) setBusy(false);
-        }
-      };
-
-      /** Keep Tab inside the dialog and let Escape close it. */
-      const onKeyDown = (event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          props.onClose();
-          return;
-        }
-        if (event.key !== 'Tab') return;
-        const root = dialogRef.current;
-        if (!root) return;
-        const selectable = root.querySelectorAll(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-        const nodes = [];
-        for (let index = 0; index < selectable.length; index += 1) {
-          const node = selectable[index];
-          if (node.offsetParent !== null || node === document.activeElement) nodes.push(node);
-        }
-        if (nodes.length === 0) return;
-        const first = nodes[0];
-        const last = nodes[nodes.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
         }
       };
 
@@ -2737,8 +2722,7 @@ window.__ModuleLoader__.load({
 .dshmcp-session-wrap{display:flex;flex-direction:column;gap:12px;max-width:760px;margin:0 auto}
 .dshmcp-session-page .dshmcp-session-head{align-items:flex-start;gap:0}
 .dshmcp-session-page .dshmcp-session-title{font-size:14px;line-height:20px;font-weight:600}
-.dshmcp-session-page .dshmcp-session-list{max-height:none;overflow:visible}
-.dshmcp-session-page .dshmcp-session-list{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);overflow:hidden}
+.dshmcp-session-page .dshmcp-session-list{max-height:none;overflow:hidden;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}
 .dshmcp-session-page .dshmcp-session-row{min-height:48px;padding:0 14px;border:0;border-top:.5px solid var(--dsw-alias-border-l1);border-radius:0;background:transparent;gap:10px}
 .dshmcp-session-page .dshmcp-session-row:first-child{border-top:0}
 .dshmcp-session-page .dshmcp-session-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -2876,13 +2860,14 @@ window.__ModuleLoader__.load({
             : h(
                 'ul',
                 { className: 'dshmcp-session-list' },
-                state.servers.map((server) =>
-                  h(
+                state.servers.map((server) => {
+                  const phase = sessionPhaseOf(server);
+                  return h(
                     'li',
                     { key: server.id, className: 'dshmcp-session-row' },
-                    h(StatusDot, { phase: phaseOf(server) }),
+                    h(StatusDot, { phase }),
                     h('span', { className: 'dshmcp-session-name' }, server.name),
-                    h('span', { className: 'dshmcp-session-status' }, server.visible ? t(PHASE_KEY[phaseOf(server)]) : t('sessionHidden')),
+                    h('span', { className: 'dshmcp-session-status' }, server.visible ? t(PHASE_KEY[phase]) : t('sessionHidden')),
                     h(SwitchButton, {
                       checked: server.visible,
                       busy: busy === server.id,
@@ -2890,8 +2875,8 @@ window.__ModuleLoader__.load({
                       label: t('sessionToggle', { name: server.name }),
                       onChange: () => props.onToggle(server),
                     }),
-                  ),
-                ),
+                  );
+                }),
               ),
         state !== null && Array.isArray(state.external) && state.external.length > 0
           ? h(
@@ -3085,8 +3070,9 @@ window.__ModuleLoader__.load({
         } catch (error) {
           if (!alive.current) return;
           setNotice({ tone: 'error', text: explain(error, t) });
-          // The record the row pointed at is gone; resync so the list matches the Host.
-          if (error instanceof ApiError && error.code === 'not-found') requestList(true);
+          // The record the row pointed at is gone, or another process replaced
+          // the document; resync so the list matches the Host.
+          if (error instanceof ApiError && (error.code === 'not-found' || error.code === 'conflict')) requestList(true);
         } finally {
           activeActions.current.delete(id);
           if (alive.current) bumpBusy();
@@ -3351,19 +3337,15 @@ window.__ModuleLoader__.load({
 .dshmcp-btn[data-variant=danger]{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}
 .dshmcp-btn[data-variant=danger]:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 16%,transparent)}
 .dshmcp-btn-small{height:28px;padding:0 10px;font-size:12px;line-height:18px;border-radius:var(--dsw-radius-sm)}
-.dshmcp-btn-stack{display:inline-grid;justify-items:center}
-.dshmcp-btn-stack>*{grid-area:1/1;white-space:nowrap}
-.dshmcp-btn-ghost{visibility:hidden}
 .dshmcp-icon-btn{box-sizing:border-box;width:28px;height:28px;padding:0;border-radius:var(--dsw-radius-sm);border:0;background:transparent;color:var(--dsw-alias-label-secondary);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
 .dshmcp-icon-btn:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-label-primary) 7%,transparent);color:var(--dsw-alias-label-primary)}
 .dshmcp-icon-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dshmcp-icon-btn:disabled{opacity:.45;cursor:default}
 .dshmcp-icon-btn[data-danger=true]{color:var(--dsw-alias-state-error-primary)}
 .dshmcp-icon-btn[data-danger=true]:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}
-.dshmcp-icon-btn[data-spinning=true] .dshmcp-icon{animation:dshmcp-spin 1s linear infinite}
 .dshmcp-icon{display:block;flex:none}
 .dshmcp-banners{display:flex;flex-direction:column;gap:8px}
-.dshmcp-banner{display:flex;align-items:flex-start;gap:10px;margin:0;padding:10px 12px;border-radius:10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}
+.dshmcp-banner{display:flex;align-items:flex-start;gap:10px;margin:0;padding:10px 12px;border-radius:var(--dsw-radius-md);font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}
 .dshmcp-banner[data-tone=error]{border:.5px solid color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
 .dshmcp-banner[data-tone=error]>.dshmcp-icon{color:var(--dsw-alias-state-error-primary)}
 .dshmcp-banner[data-tone=ok]{border:.5px solid color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 8%,transparent)}
@@ -3378,7 +3360,6 @@ window.__ModuleLoader__.load({
 .dshmcp-external{display:flex;flex-direction:column;gap:8px;margin-top:20px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l2)}
 .dshmcp-external .dshmcp-row{background:transparent;border:.5px dashed var(--dsw-alias-border-l2)}
 .dshmcp-line{display:flex;align-items:flex-start;gap:12px;min-width:0}
-.dshmcp-actions{padding-top:1px}
 .dshmcp-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
 .dshmcp-dot[data-state=ready]{background:var(--dsw-alias-state-success-primary)}
 .dshmcp-dot[data-state=connecting]{background:var(--dsw-alias-state-warn-primary);animation:dshmcp-pulse 1.4s ease-in-out infinite}
@@ -3401,7 +3382,7 @@ window.__ModuleLoader__.load({
 .dshmcp-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin-top:4px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);min-width:0}
 .dshmcp-chip{border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);padding:0 5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:16px;text-transform:lowercase}
 .dshmcp-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
-.dshmcp-actions{display:flex;align-items:center;gap:2px;flex:none}
+.dshmcp-actions{display:flex;align-items:center;gap:2px;flex:none;padding-top:1px}
 .dshmcp-actions-spaced{gap:10px}
 .dshmcp-switch{position:relative;box-sizing:border-box;width:36px;height:20px;padding:0;border-radius:999px;border:.5px solid var(--dsw-alias-border-l3);background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background .15s ease,border-color .15s ease}
 .dshmcp-switch::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transform:translateY(-50%);transition:left .15s ease}
@@ -3411,14 +3392,14 @@ window.__ModuleLoader__.load({
 .dshmcp-switch[aria-busy=true]::after{opacity:.35}
 .dshmcp-switch:disabled{cursor:default}
 .dshmcp-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.dshmcp-expand{display:inline-flex;align-items:center;gap:3px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.dshmcp-expand{display:inline-flex;align-items:center;gap:3px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:12px;line-height:18px;cursor:pointer}
 .dshmcp-expand:hover{color:var(--dsw-alias-label-primary)}
 .dshmcp-expand:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .dshmcp-expand[aria-expanded=true] .dshmcp-icon{transform:rotate(180deg)}
 .dshmcp-expand .dshmcp-icon{transition:transform .16s ease}
 .dshmcp-row-error{display:flex;align-items:flex-start;gap:6px;margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);overflow-wrap:anywhere}
 .dshmcp-row-error .dshmcp-icon{margin-top:2px}
-.dshmcp-details{display:flex;flex-direction:column;gap:10px;margin:2px 0 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+.dshmcp-details{display:flex;flex-direction:column;gap:10px;margin:2px 0 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
 .dshmcp-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .dshmcp-tools{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .dshmcp-tool{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;min-width:0}
@@ -3432,7 +3413,7 @@ window.__ModuleLoader__.load({
 .dshmcp-fact{display:flex;gap:8px;font-size:12px;line-height:18px;min-width:0}
 .dshmcp-fact dt{color:var(--dsw-alias-label-secondary);flex:none}
 .dshmcp-fact dd{margin:0;min-width:0;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--dsw-alias-label-primary)}
-.dshmcp-confirm{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;border:.5px solid color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
+.dshmcp-confirm{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:var(--dsw-radius-md);border:.5px solid color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
 .dshmcp-confirm>.dshmcp-icon{color:var(--dsw-alias-state-error-primary);margin-top:2px}
 .dshmcp-confirm-body{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
 .dshmcp-confirm-text{margin:0;font-size:13px;line-height:20px;overflow-wrap:anywhere}
@@ -3445,7 +3426,7 @@ window.__ModuleLoader__.load({
 .dshmcp-empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:6px;max-width:100%}
 .dshmcp-empty-actions .dshmcp-btn{margin-top:0}
 .dshmcp-dialog-import{width:min(680px,100%)}
-.dshmcp-import-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:174px;overflow-y:auto;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);padding:8px 10px}
+.dshmcp-import-list{list-style:none;margin:0;padding:8px 10px;display:flex;flex-direction:column;gap:6px;max-height:174px;overflow-y:auto;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
 .dshmcp-import-row{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px;min-width:0}
 .dshmcp-import-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;flex:none;max-width:40%}
 .dshmcp-import-target{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
@@ -3456,7 +3437,7 @@ window.__ModuleLoader__.load({
 .dshmcp-skeleton-row{display:flex;align-items:center;gap:12px}
 .dshmcp-skeleton-dot{width:8px;height:8px;border-radius:50%;flex:none;background:color-mix(in srgb,var(--dsw-alias-label-primary) 10%,transparent)}
 .dshmcp-skeleton-lines{display:flex;flex-direction:column;gap:6px;flex:1}
-.dshmcp-skeleton-line{height:12px;border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 9%,transparent);animation:dshmcp-pulse 1.6s ease-in-out infinite}
+.dshmcp-skeleton-line{height:12px;border-radius:var(--dsw-radius-sm);background:color-mix(in srgb,var(--dsw-alias-label-primary) 9%,transparent);animation:dshmcp-pulse 1.6s ease-in-out infinite}
 .dshmcp-skeleton-line-soft{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)}
 .dshmcp-scrim{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur)}
 .dshmcp-dialog{box-sizing:border-box;width:min(560px,100%);max-height:min(86vh,760px);overflow:hidden;display:flex;flex-direction:column;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-prominent)}
@@ -3478,10 +3459,9 @@ window.__ModuleLoader__.load({
 .dshmcp-input:focus,.dshmcp-select:focus,.dshmcp-textarea:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 .5px var(--dsw-alias-brand-primary)}
 .dshmcp-input[aria-invalid=true],.dshmcp-select[aria-invalid=true],.dshmcp-textarea[aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary);box-shadow:none}
 .dshmcp-input[aria-invalid=true]:focus,.dshmcp-select[aria-invalid=true]:focus,.dshmcp-textarea[aria-invalid=true]:focus{box-shadow:inset 0 0 0 .5px var(--dsw-alias-state-error-primary)}
-@keyframes dshmcp-spin{to{transform:rotate(360deg)}}
 @keyframes dshmcp-pulse{0%,100%{opacity:1}50%{opacity:.45}}
 @media (max-width:560px){.dshmcp-grid{grid-template-columns:1fr}.dshmcp-line{flex-wrap:wrap}.dshmcp-actions{width:100%;justify-content:flex-end}.dshmcp-confirm{flex-wrap:wrap}}
-@media (prefers-reduced-motion:reduce){.dshmcp-dot[data-state=connecting],.dshmcp-skeleton-line,.dshmcp-icon-btn[data-spinning=true] .dshmcp-icon{animation:none}.dshmcp-expand .dshmcp-icon,.dshmcp-switch,.dshmcp-switch::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.dshmcp-dot[data-state=connecting],.dshmcp-skeleton-line{animation:none}.dshmcp-expand .dshmcp-icon,.dshmcp-switch,.dshmcp-switch::after{transition:none}}
 `;
 
     // ── module surface ────────────────────────────────────────────────────

@@ -20,7 +20,9 @@
  * @module @kuhufu/dsh-mcp-manager/host/profile-patch
  */
 
-import { copyFile, readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+
+import { copyFileOnce, writeFileAtomic } from './atomic-file.js';
 
 /** A top-level sequence entry starts at column zero with "- ". */
 const ENTRY_START = /^-(?:\s|$)/;
@@ -164,10 +166,8 @@ export async function repairDuplicateRow(patchPath, entryId, enabled) {
   if (!startsTopLevelArray(next)) return { repaired: false, reason: 'repair would not start with a top-level array' };
   if (next === text) return { repaired: false, reason: 'nothing to change' };
 
-  const backup = `${patchPath}.bak-${new Date().toISOString().replace(/[^0-9]/g, '')}`;
-  await copyFile(patchPath, backup);
-  const temporary = `${patchPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, next, { mode: 0o600 });
-  await rename(temporary, patchPath);
+  const stamp = new Date().toISOString().replace(/[^0-9]/g, '');
+  const backup = await copyFileOnce(patchPath, `bak-${stamp}`);
+  await writeFileAtomic(patchPath, next);
   return { repaired: true, backup };
 }

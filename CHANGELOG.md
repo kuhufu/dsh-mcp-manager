@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A refused write never drops another process's records: every store re-reads the document and
+  compares it with the bytes it last read or wrote (`mcp-manager.json`, the session overrides and
+  the foreign default flags), answers `conflict` when another Harness instance replaced it, and
+  follows the on-disk state so the retry starts from the document that won.
+- The MCP tool catalog is bounded: 512 tools per server, 64 KiB per `inputSchema`, 8 MiB for the
+  whole catalog. Exceeding a limit fails the handshake with a visible error instead of registering
+  an unbounded set on every Agent; an oversized single schema degrades to an open parameter object
+  and is reported in the activity log.
+- `initializeTimeoutMs` now bounds the whole handshake — `initialize`, `notifications/initialized`
+  and every `tools/list` page — instead of only the first request.
 - Direct MCP JSON import: paste or load a Claude Desktop / Claude Code / Cursor `mcpServers`
   document, a VS Code `servers` object, a top-level server array or a bare map (JSONC comments
   and trailing commas included). Names are normalized and de-duplicated, the transport is
@@ -28,7 +38,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a separate `npm run test:browser` command with a CI browser job, and unified
   `npm test` / `npm run check` commands.
 
+### Changed
+
+- One `host/atomic-file.js` now owns the atomic write and never-overwrite backup rules for all
+  three persisted documents and both patch writers, replacing five near-identical copies.
+- Dead code removed: unused module exports, the `data-spinning` spinner style nothing sets, an
+  unused locale key, and the duplicated modal focus trap (now one `useDialogModal` hook).
+
 ### Fixed
+
+- Cross-server tool-name collisions are reported on the server (`status: "error"` naming the tool
+  and its owner) instead of silently leaving the Agent without the tools while the page showed
+  `ready`; the error clears once a later sync succeeds.
+- Enabling or hot-reloading the bundle attaches Agents that already exist (`agents.list()` /
+  `roots()`), so live Sessions are not left without MCP tools until a new Agent is created.
+- `reconnect` refuses a server nothing wants (disabled, or default-off with no Session showing it)
+  with an `invalid` failure and a disabled control that explains itself, instead of an `ok`
+  no-op.
+- The `/mcp` panel and View report a server this Session shows by its real connection state; a
+  globally disabled but session-enabled server no longer reads "Disabled" beside a switched-on
+  control.
+- Env and header keys such as `__proto__` are stored as own properties instead of being silently
+  dropped by the prototype setter.
+- Patch backups never overwrite a snapshot taken in the same millisecond, and both patch writers
+  flush their temporary file before the rename, matching the store's persistence rules.
+- Client: the unparsable-response fallback reads "the host returned HTTP 500" through the locale,
+  a `conflict` failure refreshes the list, and a hidden duplicate "Migrate here" button, two
+  redundant stylesheet declarations and hardcoded corner radii are gone.
 
 - Keep patch repair from ever leaving `cordis.patch.yml` without a top-level YAML array:
   block-style `insert` items are handled, both files are validated before writing, and a

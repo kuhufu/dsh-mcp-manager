@@ -23,30 +23,43 @@
 import { spawn } from 'node:child_process';
 
 /** MCP protocol revision this client speaks. */
-export const PROTOCOL_VERSION = '2025-06-18';
+const PROTOCOL_VERSION = '2025-06-18';
 /** Protocol revisions this implementation can negotiate during initialization. */
-export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);
+const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);
 
 /** Client identity announced during `initialize`. */
-export const CLIENT_INFO = Object.freeze({ name: 'dsh-mcp-manager', version: '0.1.0' });
+const CLIENT_INFO = Object.freeze({ name: 'dsh-mcp-manager', version: '0.1.0' });
 
 /** Default per-request deadline (ms). */
-export const REQUEST_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 /** Deadline for the `initialize` request (ms). */
-export const INITIALIZE_TIMEOUT_MS = 30_000;
+const INITIALIZE_TIMEOUT_MS = 30_000;
 
 /** Maximum characters of server instructions exposed to the Client. */
-export const MAX_INSTRUCTIONS_LENGTH = 4_000;
+const MAX_INSTRUCTIONS_LENGTH = 4_000;
 
 /** DeepSeek function-name budget for a public tool name. */
-export const MAX_PUBLIC_NAME_LENGTH = 64;
+const MAX_PUBLIC_NAME_LENGTH = 64;
 
 /** DeepSeek function-name character vocabulary. */
 const INVALID_PUBLIC_NAME_CHARS = /[^A-Za-z0-9_-]/g;
 
 /** Upper bound on `tools/list` pages followed in one handshake. */
 const MAX_TOOL_PAGES = 200;
+
+/**
+ * Upper bound on the tools one server may advertise. A runaway catalog would be
+ * copied into every attached Agent's registry, so it fails the handshake with a
+ * visible error instead of growing without limit.
+ */
+export const MAX_TOOL_COUNT = 512;
+
+/** Upper bound on one advertised `inputSchema` (UTF-8 bytes, serialized). */
+export const MAX_TOOL_SCHEMA_BYTES = 64 * 1024;
+
+/** Upper bound on the whole advertised catalog (UTF-8 bytes, serialized). */
+const MAX_TOOL_CATALOG_BYTES = 8 * 1024 * 1024;
 
 /** Bytes of child stderr retained for failure diagnostics. */
 const STDERR_TAIL_LIMIT = 4_096;
@@ -55,7 +68,7 @@ const STDERR_TAIL_LIMIT = 4_096;
 const EMPTY_INPUT_SCHEMA = Object.freeze({ type: 'object', properties: {} });
 
 /** Failure raised by this MCP client. */
-export class McpError extends Error {
+class McpError extends Error {
   /**
    * @param {string} message - human-readable failure text.
    * @param {{ cause?: unknown, code?: number }} [options] - JSON-RPC error code or cause.
@@ -93,7 +106,7 @@ function cleanStderrTail(tail) {
  *
  * @returns {Record<string, string>} fresh environment object.
  */
-export function scrubbedParentEnv() {
+function scrubbedParentEnv() {
   /** @type {Record<string, string>} */
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -110,7 +123,7 @@ export function scrubbedParentEnv() {
  * @param {object} server - server record with optional `env`.
  * @returns {Record<string, string>} merged environment.
  */
-export function childEnv(server) {
+function childEnv(server) {
   return { ...scrubbedParentEnv(), ...(server.env ?? {}) };
 }
 
@@ -120,7 +133,7 @@ export function childEnv(server) {
  * @param {object} server - stdio server record (`command`, `args`, `env`, `cwd`).
  * @returns {object} transport handle used by {@link createRpcConnection}.
  */
-export function createStdioTransport(server) {
+function createStdioTransport(server) {
   const child = spawn(server.command, server.args ?? [], {
     cwd: server.cwd ?? undefined,
     env: childEnv(server),
@@ -612,13 +625,13 @@ export function createRpcConnection(transport, options = {}) {
     });
   }
 
-  async function notify(method, params) {
+  async function notify(method, params, notifyOptions = {}) {
     if (closed) throw new McpError(`${label}: connection is closed`);
     /** @type {Record<string, unknown>} */
     const message = { jsonrpc: '2.0', method };
     if (params !== undefined) message.params = params;
     try {
-      await transport.send(message, { signal: AbortSignal.timeout(requestTimeoutMs) });
+      await transport.send(message, { signal: AbortSignal.timeout(notifyOptions.timeoutMs ?? requestTimeoutMs) });
     } catch (error) {
       throw error instanceof McpError ? error : new McpError(`${label}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
@@ -698,19 +711,33 @@ export async function connect(server, options = {}) {
   };
 
   try {
+    // `initializeTimeoutMs` bounds the whole handshake — initialize, the
+    // `initialized` notification and every `tools/list` page — not just the
+    // first request, so a server that answers `initialize` and then stalls
+    // cannot hold the connection attempt for the tool timeout.
+    const handshake = {
+      deadline: Date.now() + initializeTimeoutMs,
+      timeoutMs: initializeTimeoutMs,
+      label,
+    };
     const init = await rpc.request(
       'initialize',
       { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO },
-      { timeoutMs: initializeTimeoutMs },
+      { timeoutMs: Math.min(initializeTimeoutMs, handshakeTimeLeft(handshake)) },
     );
     if (!isRecord(init)) throw new McpError(`${label}: initialize returned a non-object result`);
     if (!SUPPORTED_PROTOCOL_VERSIONS.includes(init.protocolVersion)) {
       throw new McpError(`${label}: unsupported MCP protocol version ${String(init.protocolVersion)}`);
     }
     transport.setProtocolVersion?.(init.protocolVersion);
-    await rpc.notify('notifications/initialized');
+    await rpc.notify('notifications/initialized', undefined, {
+      timeoutMs: Math.min(requestTimeoutMs, handshakeTimeLeft(handshake)),
+    });
     const capabilities = isRecord(init.capabilities) ? init.capabilities : {};
-    const tools = capabilities.tools === undefined ? [] : await listAllTools(rpc, requestTimeoutMs);
+    const listed = capabilities.tools === undefined
+      ? { tools: [], warnings: [] }
+      : await listAllTools(rpc, requestTimeoutMs, handshake);
+    const tools = listed.tools;
     const instructions = typeof init.instructions === 'string' ? init.instructions.slice(0, MAX_INSTRUCTIONS_LENGTH) : undefined;
     signal?.removeEventListener('abort', onAbort);
     return {
@@ -720,6 +747,7 @@ export async function connect(server, options = {}) {
       protocolVersion: typeof init.protocolVersion === 'string' ? init.protocolVersion : undefined,
       instructions: instructions === '' ? undefined : instructions,
       tools,
+      warnings: listed.warnings,
       listTools() {
         return listAllTools(rpc, requestTimeoutMs);
       },
@@ -750,24 +778,79 @@ export async function connect(server, options = {}) {
   }
 }
 
-/** Aggregate every `tools/list` page, following `nextCursor`. */
-async function listAllTools(rpc, requestTimeoutMs) {
+/**
+ * Remaining handshake budget in milliseconds.
+ * @param {{ deadline: number, timeoutMs: number, label: string }} handshake - handshake descriptor.
+ * @returns {number} milliseconds left, at least 1.
+ * @throws {McpError} once the budget is exhausted.
+ */
+function handshakeTimeLeft(handshake) {
+  const left = handshake.deadline - Date.now();
+  if (left <= 0) throw new McpError(`${handshake.label}: the MCP handshake did not finish within ${handshake.timeoutMs} ms`);
+  return Math.max(1, left);
+}
+
+/**
+ * Aggregate every `tools/list` page, following `nextCursor`, inside an optional
+ * handshake deadline and the catalog caps.
+ *
+ * @param {object} rpc - live RPC connection.
+ * @param {number} requestTimeoutMs - per-request deadline when no handshake bounds it.
+ * @param {{ deadline: number, timeoutMs: number, label: string }} [handshake] - whole-handshake budget.
+ * @returns {Promise<{ tools: object[], warnings: string[] }>} advertised tools plus non-fatal reports.
+ */
+async function listAllTools(rpc, requestTimeoutMs, handshake) {
+  const scope = handshake === undefined ? 'the MCP server' : handshake.label;
   /** @type {object[]} */
   const tools = [];
+  /** @type {string[]} */
+  const warnings = [];
+  let catalogBytes = 0;
   let cursor;
   const cursors = new Set();
+  const budget = () => (handshake === undefined ? requestTimeoutMs : Math.min(requestTimeoutMs, handshakeTimeLeft(handshake)));
   for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
-    const result = await rpc.request('tools/list', cursor === undefined ? {} : { cursor }, { timeoutMs: requestTimeoutMs });
+    const result = await rpc.request('tools/list', cursor === undefined ? {} : { cursor }, { timeoutMs: budget() });
     if (!isRecord(result) || !Array.isArray(result.tools)) throw new McpError('Invalid tools/list response');
-    if (Array.isArray(result.tools)) {
-      for (const tool of result.tools) if (isRecord(tool) && typeof tool.name === 'string' && tool.name !== '') tools.push(tool);
+    for (const tool of result.tools) {
+      if (!isRecord(tool) || typeof tool.name !== 'string' || tool.name === '') continue;
+      if (tools.length >= MAX_TOOL_COUNT) throw new McpError(`${scope} advertises more than ${MAX_TOOL_COUNT} tools`);
+      const bounded = boundToolSchema(tool, warnings, scope);
+      catalogBytes += Buffer.byteLength(JSON.stringify(bounded.inputSchema ?? {}), 'utf8');
+      if (catalogBytes > MAX_TOOL_CATALOG_BYTES) {
+        throw new McpError(`${scope} advertises a tool catalog larger than ${MAX_TOOL_CATALOG_BYTES} bytes`);
+      }
+      tools.push(bounded);
     }
     cursor = typeof result.nextCursor === 'string' && result.nextCursor !== '' ? result.nextCursor : undefined;
-    if (cursor === undefined) return tools;
+    if (cursor === undefined) return { tools, warnings };
     if (cursors.has(cursor)) throw new McpError('Repeated tools/list cursor');
     cursors.add(cursor);
   }
   throw new McpError('Too many tools/list pages');
+}
+
+/**
+ * Keep an advertised input schema inside the per-tool budget: an oversized one
+ * is dropped (the tool keeps an open parameter object) and reported, so the
+ * catalog cannot be used to inflate every Agent's registry.
+ *
+ * @param {object} tool - raw advertised tool.
+ * @param {string[]} warnings - non-fatal report sink.
+ * @param {string} scope - label naming the server in the report.
+ * @returns {object} the tool, possibly with its schema removed.
+ */
+function boundToolSchema(tool, warnings, scope) {
+  if (tool.inputSchema === undefined || tool.inputSchema === null) return tool;
+  let serialized;
+  try {
+    serialized = JSON.stringify(tool.inputSchema);
+  } catch {
+    serialized = undefined;
+  }
+  if (serialized !== undefined && Buffer.byteLength(serialized, 'utf8') <= MAX_TOOL_SCHEMA_BYTES) return tool;
+  warnings.push(`${scope}: the input schema of tool "${tool.name}" is larger than ${MAX_TOOL_SCHEMA_BYTES} bytes and was dropped`);
+  return { ...tool, inputSchema: undefined };
 }
 
 /** Normalize MCP `serverInfo` to the persisted view vocabulary. */
@@ -851,7 +934,7 @@ export function flattenContent(content, toolName) {
  * @param {unknown} schema - advertised MCP input schema.
  * @returns {object} JSON Schema handed to the tool registry.
  */
-export function normalizeInputSchema(schema) {
+function normalizeInputSchema(schema) {
   if (!isRecord(schema)) return { ...EMPTY_INPUT_SCHEMA };
   const normalized = { ...schema };
   if (normalized.type === undefined && isRecord(normalized.properties)) normalized.type = 'object';

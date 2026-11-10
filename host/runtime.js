@@ -12,7 +12,6 @@ import { CONNECTION_FINGERPRINT, connectionFingerprint } from './store.js';
  * MCP connection lifetimes, retry scheduling, tool registrations and activity.
  *
  * @param {object} dependencies - Runtime dependencies.
- * @param {object} dependencies.ctx - Host tool registry context.
  * @param {object} dependencies.store - Read-only access to current server records.
  * @param {object} [dependencies.logger] - Host information logger.
  * @param {(promise: Promise<unknown>) => Promise<void>} dependencies.track - Tracks and logs background failures.
@@ -21,7 +20,7 @@ import { CONNECTION_FINGERPRINT, connectionFingerprint } from './store.js';
  * @param {() => boolean} dependencies.isDisposed - Whether plugin shutdown has started.
  * @returns {object} connection operations and access to runtime state.
  */
-export function createRuntime({ ctx, store, logger, track, warn, fail, isDisposed }) {
+export function createRuntime({ store, logger, track, warn, fail, isDisposed }) {
   const runtime = new Map();
   /** Connection identity of records that are not committed store snapshots (see {@link fingerprintOf}). */
   const fingerprints = new WeakMap();
@@ -76,6 +75,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
         fingerprint: undefined,
         attempt: 0,
         retryAttempt: 0,
+        registrationFailed: false,
         logs: [],
         definitions: [],
       };
@@ -94,6 +94,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.serverInfo = undefined;
     state.instructions = undefined;
     state.connectedAt = undefined;
+    state.registrationFailed = false;
   }
 
   /** Fields whose change requires a fresh connection and tool swap. */
@@ -113,6 +114,59 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
   function log(state, level, message) {
     state.logs.push({ time: Date.now(), level, message: String(message).slice(0, 1000) });
     if (state.logs.length > 50) state.logs.shift();
+  }
+
+  /**
+   * Record the non-fatal reports a connection produced (dropped schemas).
+   * @param {object} state - runtime entry.
+   * @param {string[]} warnings - messages from the MCP client.
+   * @returns {void}
+   */
+  function logWarnings(state, warnings) {
+    for (const message of warnings ?? []) log(state, 'info', message);
+  }
+
+  /**
+   * Surface a failed per-Agent tool registration on the server itself.
+   *
+   * Registering on `agent.ctx` is the only place a cross-server public-name
+   * collision becomes visible; without this the connection would keep showing
+   * `ready` with its tools listed while the Agent silently has none of them.
+   *
+   * @param {string} serverId - server id.
+   * @param {string} message - user-facing explanation.
+   * @returns {void}
+   */
+  function registrationFailed(serverId, message) {
+    const state = runtime.get(serverId);
+    if (state === undefined || state.registrationFailed === true) return;
+    state.registrationFailed = true;
+    state.status = 'error';
+    state.error = message;
+    log(state, 'error', message);
+    warn(message);
+    // Edge-triggered: the retry that this notification schedules sees the flag
+    // and cannot notify again, so a permanent collision settles immediately.
+    notify(serverId);
+  }
+
+  /**
+   * Clear a previous registration failure after a successful registration.
+   * @param {string} serverId - server id.
+   * @returns {void}
+   */
+  function registrationRecovered(serverId) {
+    const state = runtime.get(serverId);
+    if (state === undefined || state.registrationFailed !== true) return;
+    state.registrationFailed = false;
+    state.error = undefined;
+    if (state.connection !== undefined && !state.connection.closed) {
+      state.status = 'ready';
+      log(state, 'info', 'Tool registration recovered');
+    } else if (state.status === 'error') {
+      state.status = 'stopped';
+    }
+    notify(serverId);
   }
 
   function cancelRetry(state) {
@@ -270,11 +324,12 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
         try {
           while (dirty && state.connection === connection && !isDisposed()) {
             dirty = false;
-            const tools = await connection.listTools();
+            const listed = await connection.listTools();
             if (state.connection !== connection || isDisposed()) return;
             const current = store.get(server.id);
             if (!wantsConnection(current)) return;
-            installTools(current, state, connection, tools);
+            logWarnings(state, listed.warnings);
+            installTools(current, state, connection, listed.tools);
             log(state, 'info', `Tool list refreshed: ${state.toolCount} enabled`);
           }
         } catch (error) { log(state, 'error', `Tool refresh failed: ${formatError(error)}`); }
@@ -290,6 +345,7 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     state.retryAttempt = 0;
     state.nextRetryAt = undefined;
     state.status = 'ready';
+    logWarnings(state, connection.warnings);
     log(state, 'info', `Connected: ${state.toolCount} tools, protocol ${connection.protocolVersion}`);
     if (typeof logger?.info === 'function') logger.info(`mcp-manager: "${server.name}" connected with ${state.toolCount} tool(s)`);
   }
@@ -397,16 +453,6 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
   }
 
   /**
-   * Connection generation of one server: changes across reconnects, so callers
-   * can detect that the registered closures point at a closed connection.
-   * @param {string} id - server id.
-   * @returns {number} monotonically increasing attempt counter.
-   */
-  function generationOf(id) {
-    return ensureState(id).attempt;
-  }
-
-  /**
    * Current tool definitions for one connected server.
    * @param {string} id - server id.
    * @returns {object[]} definitions registered per agent.
@@ -423,8 +469,20 @@ export function createRuntime({ ctx, store, logger, track, warn, fail, isDispose
     const state = runtime.get(server.id);
     if (state?.connection && state.status === 'ready') installTools(server, state, state.connection, state.connection.tools);
   }
-  return { stateOf: (id) => runtime.get(id), startServer, stopServer, reconnectServer, reconcile, updateTools, applyDesired, definitionsOf, generationOf, revisionOf, subscribe, stopAll,
+  return {
+    stateOf: (id) => runtime.get(id),
+    stopServer,
+    reconnectServer,
+    updateTools,
+    applyDesired,
+    definitionsOf,
+    revisionOf,
+    subscribe,
+    stopAll,
+    registrationFailed,
+    registrationRecovered,
     hasTool: (id, name) => runtime.get(id)?.tools.some((tool) => tool.name === name) ?? false,
-    forget: (id) => runtime.delete(id) };
+    forget: (id) => runtime.delete(id),
+  };
 }
 

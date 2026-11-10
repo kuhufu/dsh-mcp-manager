@@ -114,6 +114,9 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 | 在左侧栏显示入口 | 安装或移除左栏入口；设置页不受影响。 |
 | 外部条目开关 | 直接启用/停用某条 `dsh-mcp-client` 配置，等同「设置 → 插件」里的开关。同名记录已在本页管理时，开关会锁住。 |
 
+「重连」只对当前会连接的服务器可用。关闭了「默认注入」、且本会话没有在 `/mcp` 里开启的服务器
+处于「已停止」状态，重连按钮会禁用并说明原因，而不是给出一次无声的空操作。
+
 ### 工具命名
 
 工具注册为 `mcp__<服务器名>__<原始工具名>`，名称中 `[A-Za-z0-9_-]` 以外的字符替换为 `_`
@@ -187,6 +190,10 @@ dsh plugin --profile desktop add @kuhufu/dsh-mcp-manager
 | `mcp-manager.json.bak` | 上一次有效配置 |
 
 - 写入串行且原子（临时文件 + `rename`），内存只在持久化成功后更新，文件权限为 `0600`。
+- 每次写入前会重读文件并与本进程上次读写的字节比对。另一个 Harness 实例（同一个 `DSH_HOME`）
+  改过文件时，写入会以 `conflict` 失败并改为采用磁盘上的配置，而不是覆盖掉对方的记录；三个
+  存储文件都有这层保护。连接属于进程，所以同一 `DSH_HOME` 只应运行一个 Harness 实例，否则每台
+  MCP 服务器还会被启动两份。
 - 文件损坏、无法读取或版本不支持时进入只读恢复状态，阻止覆盖原文件；恢复或重置前会先把原字节
   归档为 `.recovery-<时间戳>-<uuid>`。旧版缺少 `version` 或 `ui` 的文档仍可读取并在下次写入时升级。
 - 单条无效或重复记录会跳过并提示，其余服务器继续可用；下次保存前会归档原文件。
@@ -212,6 +219,7 @@ Host 侧模块：
 | `host/profile-patch.js` / `patch-repair.js` | profile patch 的重复声明修复与跨层修复 |
 | `host/mcp.js` / `mcp-json.js` | 零依赖 MCP 客户端与第三方配置归一化 |
 | `host/store.js` | 校验、原子持久化与恢复 |
+| `host/atomic-file.js` | 原子写与不覆盖的备份（三个存储文件与两个 patch 写入器共用） |
 | `host/routes.js` | Fetch 路由与响应整形 |
 
 页面通信全部走 Harness Fetch 桥上的精确 `POST` 路由（相对路径 `api/mcp-manager.*`，由浏览器
@@ -247,8 +255,9 @@ npm run test:browser    # 按 test/BROWSER.md 准备环境后运行
 ```
 
 - smoke：`mcp` 29 项、`external` 97 项、`takeover-race` 8 项、`patch-repair` 27 项。
-- Node：39 项 `regression` + 21 项 `client` 测试，共 60 项，覆盖双入口同步、轮询乱序、取消、
-  持久化失败、恢复、动态工具、页面竞态和直接导入的归一化。
+- Node：47 项 `regression` + 24 项 `client` 测试，共 71 项，覆盖双入口同步、轮询乱序、取消、
+  持久化失败与并发写入冲突、恢复、动态工具、注册冲突、握手预算、工具目录上限、页面竞态和
+  直接导入的归一化。
 - 浏览器套件通过真实 React 18 页面、真实 Host 路由和本地假 MCP 服务运行，覆盖创建/编辑/复制/
   删除、连接选项、工具开关、导入导出、直接导入 MCP JSON、搜索筛选、侧栏偏好、弹窗焦点和
   320–1440 像素宽度。准备方式见 [test/BROWSER.md](test/BROWSER.md)。
@@ -291,6 +300,8 @@ Harness 按 section id 映射设置导航图标，第三方设置页只能拿到
 - 不持久化 MCP 图片/音频结果；非文本块以文字说明呈现。
 - 不支持 MCP prompts 与 resources（与官方 `dsh-mcp-client` 的限制一致）。
 - 跨服务器的工具名冲突会使该服务器注册失败并显示错误态，而不是自动改名。
+- 工具目录有上限：单台服务器最多 512 个工具、单个 `inputSchema` 最多 64 KiB、整份目录最多
+  8 MiB。超出上限会以可见错误结束握手（单个超大的 schema 会退化成空参数并在活动记录里说明）。
 
 ## License
 
